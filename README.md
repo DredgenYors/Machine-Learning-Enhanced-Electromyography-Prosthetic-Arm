@@ -1,5 +1,6 @@
 # Machine-Learning-Enhanced-Electromyography-Prosthetic-Arm
 Road Map / TODO:
+Part 1: (1st of October)
 1. Set up the Github Repo and Coding Environment
    - virtualenv on Python
 2. Collect datasets
@@ -24,4 +25,10 @@ Road Map / TODO:
 7. Integration Testing
    - Implement a small Python program to simulate reading inputs and mapping them
    - Send Python commands to Arduino over serial
+
+Part 2: Hardware & Integration (October 15th-22nd)
+1. Acquire EMG hardware
+   - Servos, battery pack, mounting equipment, wires
+2. 
+Part 3: Testing, validation, & deployment (Nov 27th)
   
