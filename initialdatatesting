@@ -1,0 +1,180 @@
+import scipy.io
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.signal import butter, filtfilt
+from tkinter import Tk
+from tkinter.filedialog import askopenfilename
+from scipy.stats import mode
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+
+# -------------------------------
+# 1. Run Python file and choose Matlab file when prompted
+# 2. Let the code run and view the plots and confusion matrix generated afterwards
+# -------------------------------
+# -------------------------------
+# 1. Prompt user to select a MATLAB file
+# -------------------------------
+Tk().withdraw()  # hide the root Tk window
+mat_file = askopenfilename(title="Select a MATLAB .mat file",
+                           filetypes=[("MAT files", "*.mat")])
+
+if not mat_file:
+    raise ValueError("No file selected. Exiting.")
+
+print(f"Selected file: {mat_file}")
+
+# -------------------------------
+# 2. Load MATLAB file
+# -------------------------------
+mat = scipy.io.loadmat(mat_file)
+emg = np.squeeze(mat['emg'])  # shape: (samples, channels)
+
+# Detect numeric labels
+if 'stimulus' in mat:
+    stimulus = mat['stimulus']
+    print("Using 'stimulus' as labels.")
+else:
+    raise ValueError("No per-sample labels found in .mat file.")
+
+# -------------------------------
+# 3. Check EMG shape
+# -------------------------------
+print("EMG shape:", emg.shape)
+if emg.ndim == 1:
+    num_channels = 1
+    emg = emg[:, np.newaxis]
+    print("Single-channel EMG")
+else:
+    num_channels = emg.shape[1]
+    print(f"Multi-channel EMG with {num_channels} channels")
+
+# -------------------------------
+# 4. Plot raw EMG
+# -------------------------------
+plt.figure(figsize=(12, 6))
+for ch in range(num_channels):
+    plt.plot(emg[:, ch] + ch*0.5, label=f'Ch {ch}')
+plt.title("Raw EMG")
+plt.xlabel("Time (samples)")
+plt.ylabel("Amplitude (offset)")
+plt.legend()
+plt.show()
+
+# -------------------------------
+# 5. Signal processing functions
+# -------------------------------
+def bandpass_filter(signal, fs=1000, lowcut=20, highcut=450, order=4):
+    nyq = 0.5 * fs
+    low = lowcut / nyq
+    high = highcut / nyq
+    b, a = butter(order, [low, high], btype='band')
+    return filtfilt(b, a, signal, axis=0)
+
+def amplify_signal(signal, gain=10):
+    return signal * gain
+
+def segment_signal(signal, window_size=200, step_size=100):
+    num_samples, num_channels = signal.shape
+    windows = []
+    for start in range(0, num_samples - window_size + 1, step_size):
+        windows.append(signal[start:start+window_size, :])
+    return np.array(windows)
+
+def extract_features(window):
+    features = []
+    for ch in range(window.shape[1]):
+        x = window[:, ch]
+        rms = np.sqrt(np.mean(x**2))
+        mav = np.mean(np.abs(x))
+        threshold = 0.01
+        zc = np.sum(np.diff(np.sign(x)) != 0 & (np.abs(x[:-1] - x[1:]) > threshold))
+        ssc = np.sum(((np.diff(x[:-1]) * np.diff(x[1:])) < 0) &
+                     (np.abs(np.diff(x[:-1])) > threshold) &
+                     (np.abs(np.diff(x[1:])) > threshold))
+        wl = np.sum(np.abs(np.diff(x)))
+        features.extend([rms, mav, zc, ssc, wl])
+    return np.array(features)
+
+# -------------------------------
+# 6. Apply filtering, amplification, rectification
+# -------------------------------
+fs = 1000  # adjust if necessary
+emg_filtered = bandpass_filter(emg, fs=fs)
+emg_amplified = amplify_signal(emg_filtered, gain=10)
+emg_rectified = np.abs(emg_amplified)
+
+# -------------------------------
+# 7. Segment EMG into windows
+# -------------------------------
+window_size = int(0.2 * fs)  # 200 ms
+step_size = int(0.1 * fs)    # 50% overlap
+windows = segment_signal(emg_rectified, window_size=window_size, step_size=step_size)
+print("Total windows:", windows.shape[0])
+
+# -------------------------------
+# 8. Assign window labels using mode
+# -------------------------------
+window_labels = []
+for start in range(0, len(stimulus) - window_size + 1, step_size):
+    window_labels.append(mode(stimulus[start:start+window_size])[0][0])
+window_labels = np.array(window_labels)
+
+print("Window labels shape:", window_labels.shape)
+print("First 20 window labels:", window_labels[:20])
+print("Unique labels:", np.unique(window_labels))
+
+# -------------------------------
+# 9. Extract features for each window
+# -------------------------------
+feature_matrix = np.array([extract_features(w) for w in windows])
+print("Feature matrix shape:", feature_matrix.shape)
+
+# -------------------------------
+# 10. Plot filtered & rectified EMG (zoomed)
+# -------------------------------
+plt.figure(figsize=(12, 4))
+for ch in range(num_channels):
+    plt.plot(emg_rectified[:2000, ch] + ch*0.5, label=f'Ch {ch}')
+plt.title("Filtered, Amplified & Rectified EMG (Zoomed)")
+plt.xlabel("Time (samples)")
+plt.ylabel("Amplitude (offset)")
+plt.legend()
+plt.show()
+
+# Split into train and test sets (80% train, 20% test)
+X_train, X_test, y_train, y_test = train_test_split(
+    feature_matrix, window_labels, test_size=0.2, random_state=42, stratify=window_labels
+)
+print("Training samples:", X_train.shape[0])
+print("Test samples:", X_test.shape[0])
+
+# Initialize classifier
+clf = RandomForestClassifier(n_estimators=100, random_state=42)
+
+# Train
+clf.fit(X_train, y_train)
+
+y_pred = clf.predict(X_test)
+
+# Accuracy
+acc = accuracy_score(y_test, y_pred)
+print("Test Accuracy:", acc)
+
+# Detailed classification report
+print("\nClassification Report:\n", classification_report(y_test, y_pred))
+
+# Confusion matrix
+cm = confusion_matrix(y_test, y_pred)
+print("\nConfusion Matrix:\n", cm)
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+plt.figure(figsize=(12, 10))
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+plt.xlabel("Predicted Label")
+plt.ylabel("True Label")
+plt.title("Confusion Matrix")
+plt.show()
