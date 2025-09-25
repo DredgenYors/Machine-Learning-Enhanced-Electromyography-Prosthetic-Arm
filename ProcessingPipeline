@@ -1,0 +1,29 @@
+Processing Order:
+1. Amplification of RAW EMG (usually controlled by hardware or some software)
+2. Filtering 
+3. Windowing (to break up the stream of data and create points for decision making)
+4. Feature Extraction (Root Mean Square (RMS), Mean Absolute Value (MAV), Zero Crossings (ZC), Slope Sign Changes (SSC), Waveform Length (WL))
+5. Classification (Convert signal to command)
+
+Filtering Break Down
+1. Bandpass Filter (20 - 500 Hz) - removes unwanted highs and lows
+2. Notch Filter (50 - 60 Hz) - removes interference
+3. Mean Subtraction - removes the DC component/offset/bias
+4. Rectification (Absolute Value) - converts bipolar signal to unipolar signal for envelope detection
+5. Low-Pass Envelope Filter (2 - 6 Hz) - smooths signal for muscle activation detection
+
+Feature Extraction Breakdown
+1. RMS - measure of signal magnitude, a power indicator of muscle detection. Higher RMS = stronger contraction
+2. MAV - average amplitude of the EMG signal, average muscle activity over a window, smooth indicator of sustained muscle activation
+3. ZC - count of oscillations around zero, signal complexity measure, fast vs slow contractions
+4. SSC - count of slope direction changes, fewer slope changes = well-coordinated, more slope changes = fine motor control
+5. WL - total signal variation over time window, cumulative activity measurement, active vs passive states, total measure of signal variance, "work" or "effort" in window
+
+Force / Strength Detection:
+RMS, MAV, WL
+
+Gesture Type Classification:
+ZC, SSC, WL, RMS, MAV
+
+Active vs Rest Detection:
+RMS, WL, MAV, ZC, SSC
