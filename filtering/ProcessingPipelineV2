@@ -1,0 +1,1577 @@
+import scipy.io
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.signal import butter, filtfilt, iirnotch
+from tkinter import Tk
+from tkinter.filedialog import askopenfilename
+import pandas as pd
+
+# -------------------------------
+# EMG Filtering & Feature Extraction Pipeline
+# -------------------------------
+
+class EMGFilteringPipeline:
+    """
+    Complete EMG filtering and feature extraction pipeline with:
+    
+    5 Filter Types:
+    1. Bandpass filter (20-500 Hz)
+    2. Notch filter (50-60 Hz) 
+    3. DC offset removal (mean subtraction)
+    4. Rectification (absolute value)
+    5. Low-pass envelope filter (2-6 Hz)
+    
+    5 Feature Types:
+    1. RMS (Root Mean Square) - Signal magnitude
+    2. MAV (Mean Absolute Value) - Average amplitude
+    3. ZC (Zero Crossings) - Count of oscillations around zero
+    4. SSC (Slope Sign Changes) - Count of slope direction changes
+    5. WL (Waveform Length) - Total signal variation over time window
+    """
+    
+    def __init__(self, fs=1000):
+        """
+        Initialize the filtering and feature extraction pipeline.
+        
+        Parameters:
+        fs: int, sampling frequency in Hz
+        """
+        self.fs = fs
+        self.original_signal = None
+        self.filtered_signal = None
+        self.filter_history = []
+        self.num_channels = 0
+        
+        # Feature extraction variables
+        self.extracted_features = None
+        self.feature_matrix = None
+        self.window_centers = None
+        self.window_size = 250  # Default window size (250ms at 1000Hz)
+        self.overlap = 0.5      # Default 50% overlap
+        
+    def load_matlab_file(self):
+        """Load EMG data from MATLAB file."""
+        print("EMG Filtering Pipeline")
+        print("=" * 50)
+        
+        # File selection
+        Tk().withdraw()  # Hide the root Tk window
+        mat_file = askopenfilename(title="Select a MATLAB .mat file",
+                                   filetypes=[("MAT files", "*.mat")])
+        
+        if not mat_file:
+            raise ValueError("No file selected. Exiting.")
+        
+        print(f"Selected file: {mat_file}")
+        
+        # Load MATLAB file
+        try:
+            mat = scipy.io.loadmat(mat_file)
+            emg = np.squeeze(mat['emg'])  # Load EMG data
+            print(f"Loaded EMG data with shape: {emg.shape}")
+        except Exception as e:
+            print(f"Error loading file: {e}")
+            return None
+        
+        # Handle multi-channel data
+        if emg.ndim > 1:
+            print(f"Multi-channel EMG detected: {emg.shape[1]} channels")
+            self.original_signal = emg
+            self.num_channels = emg.shape[1]
+        else:
+            print("Single-channel EMG detected")
+            self.original_signal = emg[:, np.newaxis]
+            self.num_channels = 1
+        
+        # Initialize filtered signal as copy of original
+        self.filtered_signal = self.original_signal.copy()
+        
+        print(f"Signal shape: {self.original_signal.shape} (samples x channels)")
+        print(f"Signal range: {np.min(self.original_signal):.6f} to {np.max(self.original_signal):.6f}")
+        print(f"Sampling frequency: {self.fs} Hz")
+        
+        return True
+    
+    def bandpass_filter(self, lowcut=20, highcut=500, order=4):
+        """
+        Apply bandpass filter to remove baseline drift and high-frequency noise.
+        
+        Parameters:
+        lowcut: float, low cutoff frequency (Hz)
+        highcut: float, high cutoff frequency (Hz) 
+        order: int, filter order
+        """
+        print(f"\nApplying bandpass filter ({lowcut}-{highcut} Hz, order {order})...")
+        
+        # Design filter
+        nyq = 0.5 * self.fs
+        low = lowcut / nyq
+        high = highcut / nyq
+        
+        if high >= 1.0:
+            high = 0.99  # Prevent filter design issues
+            print(f"  Warning: High cutoff adjusted to {high * nyq:.1f} Hz")
+        
+        b, a = butter(order, [low, high], btype='band')
+        
+        # Apply filter
+        try:
+            self.filtered_signal = filtfilt(b, a, self.filtered_signal, axis=0)
+            self.filter_history.append(f"Bandpass {lowcut}-{highcut} Hz")
+            
+            print(f"  ✓ Bandpass filter applied successfully")
+            print(f"  Signal range after filtering: {np.min(self.filtered_signal):.6f} to {np.max(self.filtered_signal):.6f}")
+            
+        except Exception as e:
+            print(f"  ✗ Error applying bandpass filter: {e}")
+    
+    def notch_filter(self, notch_freq=50, quality_factor=30):
+        """
+        Apply notch filter to remove power line interference.
+        
+        Parameters:
+        notch_freq: float, frequency to notch out (Hz) - 50 Hz Europe, 60 Hz US
+        quality_factor: float, Q factor (higher = narrower notch)
+        """
+        print(f"\nApplying notch filter ({notch_freq} Hz, Q={quality_factor})...")
+        
+        try:
+            # Design notch filter
+            b, a = iirnotch(notch_freq, quality_factor, self.fs)
+            
+            # Apply filter
+            self.filtered_signal = filtfilt(b, a, self.filtered_signal, axis=0)
+            self.filter_history.append(f"Notch {notch_freq} Hz")
+            
+            print(f"  ✓ Notch filter applied successfully")
+            print(f"  Signal range after filtering: {np.min(self.filtered_signal):.6f} to {np.max(self.filtered_signal):.6f}")
+            
+        except Exception as e:
+            print(f"  ✗ Error applying notch filter: {e}")
+    
+    def dc_removal_filter(self):
+        """
+        Remove DC offset by subtracting the mean.
+        """
+        print(f"\nApplying DC offset removal (mean subtraction)...")
+        
+        try:
+            # Calculate and subtract mean for each channel
+            dc_offset = np.mean(self.filtered_signal, axis=0)
+            self.filtered_signal = self.filtered_signal - dc_offset
+            self.filter_history.append("DC removal")
+            
+            print(f"  ✓ DC offset removed successfully")
+            print(f"  DC offset values: {dc_offset}")
+            print(f"  Signal range after filtering: {np.min(self.filtered_signal):.6f} to {np.max(self.filtered_signal):.6f}")
+            
+        except Exception as e:
+            print(f"  ✗ Error applying DC removal: {e}")
+    
+    def rectification_filter(self):
+        """
+        Apply rectification (absolute value) to get signal envelope.
+        """
+        print(f"\nApplying rectification (absolute value)...")
+        
+        try:
+            self.filtered_signal = np.abs(self.filtered_signal)
+            self.filter_history.append("Rectification")
+            
+            print(f"  ✓ Rectification applied successfully")
+            print(f"  Signal range after filtering: {np.min(self.filtered_signal):.6f} to {np.max(self.filtered_signal):.6f}")
+            
+        except Exception as e:
+            print(f"  ✗ Error applying rectification: {e}")
+    
+    def lowpass_envelope_filter(self, cutoff=6, order=4):
+        """
+        Apply low-pass filter for envelope detection.
+        
+        Parameters:
+        cutoff: float, cutoff frequency (Hz)
+        order: int, filter order
+        """
+        print(f"\nApplying low-pass envelope filter ({cutoff} Hz, order {order})...")
+        
+        try:
+            # Design filter
+            nyq = 0.5 * self.fs
+            normal_cutoff = cutoff / nyq
+            
+            if normal_cutoff >= 1.0:
+                normal_cutoff = 0.99
+                print(f"  Warning: Cutoff adjusted to {normal_cutoff * nyq:.1f} Hz")
+            
+            b, a = butter(order, normal_cutoff, btype='low')
+            
+            # Apply filter
+            self.filtered_signal = filtfilt(b, a, self.filtered_signal, axis=0)
+            self.filter_history.append(f"Low-pass {cutoff} Hz")
+            
+            print(f"  ✓ Low-pass filter applied successfully")
+            print(f"  Signal range after filtering: {np.min(self.filtered_signal):.6f} to {np.max(self.filtered_signal):.6f}")
+            
+        except Exception as e:
+            print(f"  ✗ Error applying low-pass filter: {e}")
+    
+    # -------------------------------
+    # Verification & Validation Methods
+    # -------------------------------
+    
+    def verify_filtering_pipeline(self):
+        """
+        Comprehensive verification of the filtering pipeline.
+        Checks filter responses, signal characteristics, and processing stages.
+        """
+        if self.original_signal is None:
+            print("No signal loaded for verification.")
+            return
+        
+        print(f"\n{'='*70}")
+        print("EMG FILTERING PIPELINE VERIFICATION")
+        print(f"{'='*70}")
+        
+        # 1. Signal Integrity Checks
+        print("\n1. SIGNAL INTEGRITY CHECKS:")
+        print(f"   Original signal shape: {self.original_signal.shape}")
+        print(f"   Filtered signal shape: {self.filtered_signal.shape}")
+        print(f"   Sampling frequency: {self.fs} Hz")
+        print(f"   Signal duration: {self.original_signal.shape[0]/self.fs:.2f} seconds")
+        
+        # Check for NaN or infinite values
+        orig_nan = np.isnan(self.original_signal).sum()
+        filt_nan = np.isnan(self.filtered_signal).sum()
+        orig_inf = np.isinf(self.original_signal).sum()
+        filt_inf = np.isinf(self.filtered_signal).sum()
+        
+        print(f"   NaN values - Original: {orig_nan}, Filtered: {filt_nan}")
+        print(f"   Infinite values - Original: {orig_inf}, Filtered: {filt_inf}")
+        
+        if filt_nan > 0 or filt_inf > 0:
+            print("   ⚠️  WARNING: Invalid values detected in filtered signal!")
+        else:
+            print("   ✓ No invalid values detected")
+        
+        # 2. Frequency Domain Analysis
+        print("\n2. FREQUENCY DOMAIN ANALYSIS:")
+        self._analyze_frequency_content()
+        
+        # 3. Filter Effect Verification
+        print("\n3. FILTER EFFECT VERIFICATION:")
+        self._verify_filter_effects()
+        
+        # 4. Signal Statistics
+        print("\n4. SIGNAL STATISTICS COMPARISON:")
+        self._compare_signal_statistics()
+        
+        # 5. EMG-Specific Checks
+        print("\n5. EMG-SPECIFIC VALIDATION:")
+        self._validate_emg_characteristics()
+    
+    def _analyze_frequency_content(self):
+        """Analyze frequency content before and after filtering."""
+        from scipy.fft import fft, fftfreq
+        
+        # Analyze first channel only for clarity
+        channel = 0
+        if self.num_channels > 1:
+            print(f"   Analyzing Channel 1 (of {self.num_channels} channels)")
+        
+        # Calculate FFT for original and filtered signals
+        n_samples = min(8192, self.original_signal.shape[0])  # Limit for efficiency
+        freqs = fftfreq(n_samples, 1/self.fs)[:n_samples//2]
+        
+        orig_fft = np.abs(fft(self.original_signal[:n_samples, channel]))[:n_samples//2]
+        filt_fft = np.abs(fft(self.filtered_signal[:n_samples, channel]))[:n_samples//2]
+        
+        # Find dominant frequencies
+        orig_peak_idx = np.argmax(orig_fft[1:]) + 1  # Skip DC
+        filt_peak_idx = np.argmax(filt_fft[1:]) + 1  # Skip DC
+        
+        print(f"   Original signal dominant frequency: {freqs[orig_peak_idx]:.1f} Hz")
+        print(f"   Filtered signal dominant frequency: {freqs[filt_peak_idx]:.1f} Hz")
+        
+        # Check energy in typical EMG bands
+        emg_band = (freqs >= 20) & (freqs <= 500)
+        noise_low = (freqs >= 1) & (freqs < 20)
+        noise_high = (freqs > 500) & (freqs <= 1000)
+        
+        orig_emg_energy = np.sum(orig_fft[emg_band])
+        orig_noise_low = np.sum(orig_fft[noise_low])
+        orig_noise_high = np.sum(orig_fft[noise_high])
+        
+        filt_emg_energy = np.sum(filt_fft[emg_band])
+        filt_noise_low = np.sum(filt_fft[noise_low])
+        filt_noise_high = np.sum(filt_fft[noise_high])
+        
+        print(f"   Energy in EMG band (20-500 Hz):")
+        print(f"     Original: {orig_emg_energy:.2e}, Filtered: {filt_emg_energy:.2e}")
+        print(f"   Energy in low noise (<20 Hz):")
+        print(f"     Original: {orig_noise_low:.2e}, Filtered: {filt_noise_low:.2e}")
+        print(f"   Energy in high noise (>500 Hz):")
+        print(f"     Original: {orig_noise_high:.2e}, Filtered: {filt_noise_high:.2e}")
+        
+        # Check filtering effectiveness
+        if 'Bandpass' in ' '.join(self.filter_history):
+            low_reduction = (1 - filt_noise_low/orig_noise_low) * 100 if orig_noise_low > 0 else 0
+            high_reduction = (1 - filt_noise_high/orig_noise_high) * 100 if orig_noise_high > 0 else 0
+            print(f"   Noise reduction: Low freq: {low_reduction:.1f}%, High freq: {high_reduction:.1f}%")
+    
+    def _verify_filter_effects(self):
+        """Verify that each filter had the expected effect."""
+        print(f"   Applied filters: {len(self.filter_history)}")
+        
+        for i, filter_name in enumerate(self.filter_history, 1):
+            print(f"   {i}. {filter_name}")
+        
+        # Check rectification effect
+        if 'Rectification' in self.filter_history:
+            min_val = np.min(self.filtered_signal)
+            if min_val >= 0:
+                print("   ✓ Rectification verified: All values ≥ 0")
+            else:
+                print(f"   ⚠️  Rectification issue: Found negative value {min_val:.6f}")
+        
+        # Check DC removal effect
+        if 'DC removal' in self.filter_history:
+            mean_val = np.mean(self.filtered_signal)
+            if abs(mean_val) < 1e-10:
+                print(f"   ✓ DC removal verified: Mean ≈ 0 ({mean_val:.2e})")
+            else:
+                print(f"   ⚠️  DC removal issue: Mean = {mean_val:.6f}")
+    
+    def _compare_signal_statistics(self):
+        """Compare statistical properties of original vs filtered signals."""
+        orig_stats = {
+            'Mean': np.mean(self.original_signal),
+            'Std': np.std(self.original_signal),
+            'Min': np.min(self.original_signal),
+            'Max': np.max(self.original_signal),
+            'RMS': np.sqrt(np.mean(self.original_signal**2))
+        }
+        
+        filt_stats = {
+            'Mean': np.mean(self.filtered_signal),
+            'Std': np.std(self.filtered_signal),
+            'Min': np.min(self.filtered_signal),
+            'Max': np.max(self.filtered_signal),
+            'RMS': np.sqrt(np.mean(self.filtered_signal**2))
+        }
+        
+        print(f"   {'Statistic':<10} {'Original':<12} {'Filtered':<12} {'Change':<10}")
+        print(f"   {'-'*50}")
+        
+        for stat in orig_stats.keys():
+            orig_val = orig_stats[stat]
+            filt_val = filt_stats[stat]
+            change = ((filt_val - orig_val) / orig_val * 100) if orig_val != 0 else 0
+            print(f"   {stat:<10} {orig_val:<12.4f} {filt_val:<12.4f} {change:+7.1f}%")
+    
+    def _validate_emg_characteristics(self):
+        """Validate that signal still has EMG-like characteristics."""
+        # Check signal amplitude (typical EMG range: 0.01-10 mV)
+        signal_range = np.max(self.filtered_signal) - np.min(self.filtered_signal)
+        rms_value = np.sqrt(np.mean(self.filtered_signal**2))
+        
+        print(f"   Signal range: {signal_range:.6f}")
+        print(f"   RMS amplitude: {rms_value:.6f}")
+        
+        # Check for reasonable EMG characteristics
+        if 'Rectification' in self.filter_history:
+            # After rectification, should be all positive
+            if np.min(self.filtered_signal) >= 0:
+                print("   ✓ Rectified signal is all positive")
+            else:
+                print("   ⚠️  Rectified signal has negative values")
+        
+        # Check for signal activity (not flat)
+        signal_activity = np.std(self.filtered_signal)
+        if signal_activity > 1e-6:
+            print(f"   ✓ Signal shows activity (std: {signal_activity:.6f})")
+        else:
+            print(f"   ⚠️  Signal appears flat (std: {signal_activity:.6f})")
+    
+    def verify_feature_extraction(self):
+        """
+        Comprehensive verification of extracted features.
+        Validates feature values, distributions, and physiological reasonableness.
+        """
+        if self.extracted_features is None:
+            print("No features extracted yet. Run feature extraction first.")
+            return
+        
+        print(f"\n{'='*70}")
+        print("FEATURE EXTRACTION VERIFICATION")
+        print(f"{'='*70}")
+        
+        # 1. Feature Value Validation
+        print("\n1. FEATURE VALUE VALIDATION:")
+        self._validate_feature_values()
+        
+        # 2. Feature Distribution Analysis
+        print("\n2. FEATURE DISTRIBUTION ANALYSIS:")
+        self._analyze_feature_distributions()
+        
+        # 3. Cross-Feature Correlations
+        print("\n3. CROSS-FEATURE CORRELATIONS:")
+        self._analyze_feature_correlations()
+        
+        # 4. Physiological Reasonableness
+        print("\n4. PHYSIOLOGICAL REASONABLENESS:")
+        self._validate_physiological_features()
+        
+        # 5. Feature Quality Assessment
+        print("\n5. FEATURE QUALITY ASSESSMENT:")
+        self._assess_feature_quality()
+    
+    def _validate_feature_values(self):
+        """Check if feature values are within expected ranges."""
+        feature_names = ['RMS', 'MAV', 'ZC', 'SSC', 'WL']
+        
+        for feature_name in feature_names:
+            values = self.extracted_features[feature_name]
+            
+            # Basic validation
+            has_nan = np.isnan(values).sum()
+            has_inf = np.isinf(values).sum()
+            has_negative = (values < 0).sum()
+            
+            print(f"   {feature_name}:")
+            print(f"     Shape: {values.shape}")
+            print(f"     Range: [{np.min(values):.4f}, {np.max(values):.4f}]")
+            print(f"     Mean: {np.mean(values):.4f} ± {np.std(values):.4f}")
+            
+            if has_nan > 0:
+                print(f"     ⚠️  {has_nan} NaN values detected")
+            if has_inf > 0:
+                print(f"     ⚠️  {has_inf} infinite values detected")
+            if has_negative > 0 and feature_name in ['RMS', 'MAV', 'WL']:
+                print(f"     ⚠️  {has_negative} negative values (should be positive)")
+            
+            # Feature-specific validation
+            if feature_name in ['ZC', 'SSC']:
+                non_zero_pct = np.mean(values > 0) * 100
+                print(f"     Non-zero windows: {non_zero_pct:.1f}%")
+                if non_zero_pct < 10:
+                    print(f"     ⚠️  Very few non-zero values - possible extraction issue")
+                elif non_zero_pct > 50:
+                    print(f"     ✓ Good activity detection")
+            print()
+    
+    def _analyze_feature_distributions(self):
+        """Analyze statistical distributions of features."""
+        feature_names = ['RMS', 'MAV', 'ZC', 'SSC', 'WL']
+        
+        for feature_name in feature_names:
+            values = self.extracted_features[feature_name].flatten()
+            
+            # Calculate distribution metrics
+            mean_val = np.mean(values)
+            median_val = np.median(values)
+            std_val = np.std(values)
+            skewness = np.mean(((values - mean_val) / std_val) ** 3)
+            
+            # Calculate coefficient of variation
+            cv = (std_val / mean_val) * 100 if mean_val != 0 else 0
+            
+            print(f"   {feature_name}: Mean/Median: {mean_val:.4f}/{median_val:.4f}, ")
+            print(f"             Skewness: {skewness:.2f}, CV: {cv:.1f}%")
+    
+    def _analyze_feature_correlations(self):
+        """Analyze correlations between different features."""
+        if self.feature_matrix is None:
+            print("   No feature matrix available")
+            return
+        
+        # Calculate correlation matrix
+        corr_matrix = np.corrcoef(self.feature_matrix.T)
+        feature_names = ['RMS', 'MAV', 'ZC', 'SSC', 'WL']
+        
+        print(f"   Feature correlation matrix (first channel):")
+        print(f"   {'':>8} ", end="")
+        for name in feature_names:
+            print(f"{name:>8}", end="")
+        print()
+        
+        n_features_per_channel = len(feature_names)
+        for i, name1 in enumerate(feature_names):
+            print(f"   {name1:>8} ", end="")
+            for j, name2 in enumerate(feature_names):
+                corr_val = corr_matrix[i, j]
+                print(f"{corr_val:8.3f}", end="")
+            print()
+        
+        # Highlight strong correlations
+        strong_corr = []
+        for i in range(n_features_per_channel):
+            for j in range(i+1, n_features_per_channel):
+                corr_val = abs(corr_matrix[i, j])
+                if corr_val > 0.8:
+                    strong_corr.append((feature_names[i], feature_names[j], corr_matrix[i, j]))
+        
+        if strong_corr:
+            print(f"\n   Strong correlations (|r| > 0.8):")
+            for feat1, feat2, corr in strong_corr:
+                print(f"     {feat1} - {feat2}: {corr:.3f}")
+    
+    def _validate_physiological_features(self):
+        """Check if features make physiological sense for EMG."""
+        
+        # Expected relationships for EMG
+        rms_vals = self.extracted_features['RMS'].flatten()
+        mav_vals = self.extracted_features['MAV'].flatten()
+        
+        # RMS should generally be higher than MAV for EMG
+        rms_mav_ratio = np.mean(rms_vals) / np.mean(mav_vals) if np.mean(mav_vals) > 0 else 0
+        print(f"   RMS/MAV ratio: {rms_mav_ratio:.3f} (typical EMG: 1.1-1.4)")
+        
+        if 1.1 <= rms_mav_ratio <= 1.4:
+            print(f"   ✓ RMS/MAV ratio is physiologically reasonable")
+        else:
+            print(f"   ⚠️  RMS/MAV ratio outside typical EMG range")
+        
+        # Check feature dynamics
+        zc_vals = self.extracted_features['ZC'].flatten()
+        ssc_vals = self.extracted_features['SSC'].flatten()
+        
+        zc_mean = np.mean(zc_vals)
+        ssc_mean = np.mean(ssc_vals)
+        
+        print(f"   Average ZC per window: {zc_mean:.1f} (typical: 5-50 for 250ms window)")
+        print(f"   Average SSC per window: {ssc_mean:.1f} (typical: 10-100 for 250ms window)")
+        
+        if 5 <= zc_mean <= 50:
+            print(f"   ✓ ZC values are physiologically reasonable")
+        else:
+            print(f"   ⚠️  ZC values outside typical range")
+            
+        if 10 <= ssc_mean <= 100:
+            print(f"   ✓ SSC values are physiologically reasonable")
+        else:
+            print(f"   ⚠️  SSC values outside typical range")
+    
+    def _assess_feature_quality(self):
+        """Assess overall quality of extracted features."""
+        feature_names = ['RMS', 'MAV', 'ZC', 'SSC', 'WL']
+        quality_scores = {}
+        
+        for feature_name in feature_names:
+            values = self.extracted_features[feature_name].flatten()
+            
+            # Quality metrics
+            dynamic_range = np.max(values) - np.min(values)
+            cv = (np.std(values) / np.mean(values)) * 100 if np.mean(values) > 0 else 0
+            non_zero_pct = np.mean(values > 0) * 100
+            
+            # Calculate quality score (0-100)
+            score = 0
+            
+            # Dynamic range score (0-30 points)
+            if dynamic_range > 0:
+                score += min(30, dynamic_range * 10)
+            
+            # Variability score (0-30 points) - good features have moderate CV
+            if 10 <= cv <= 100:
+                score += 30
+            elif cv > 0:
+                score += max(0, 30 - abs(cv - 50) / 2)
+            
+            # Activity score (0-40 points)
+            if feature_name in ['ZC', 'SSC']:
+                # For counting features, non-zero percentage is important
+                score += min(40, non_zero_pct * 0.8)
+            else:
+                # For amplitude features, non-zero should be 100%
+                if non_zero_pct > 95:
+                    score += 40
+                else:
+                    score += non_zero_pct * 0.4
+            
+            quality_scores[feature_name] = min(100, score)
+        
+        print(f"   Feature Quality Scores (0-100):")
+        for feature_name, score in quality_scores.items():
+            quality = "Excellent" if score >= 80 else "Good" if score >= 60 else "Fair" if score >= 40 else "Poor"
+            print(f"     {feature_name}: {score:.1f} ({quality})")
+        
+        overall_score = np.mean(list(quality_scores.values()))
+        overall_quality = "Excellent" if overall_score >= 80 else "Good" if overall_score >= 60 else "Fair" if overall_score >= 40 else "Poor"
+        print(f"\n   Overall Feature Quality: {overall_score:.1f} ({overall_quality})")
+    
+    def create_verification_report(self, save_to_file=True):
+        """
+        Generate a comprehensive verification report.
+        
+        Parameters:
+        save_to_file: bool, whether to save report to text file
+        """
+        print(f"\n{'='*70}")
+        print("GENERATING COMPREHENSIVE VERIFICATION REPORT")
+        print(f"{'='*70}")
+        
+        # Run all verification methods
+        self.verify_filtering_pipeline()
+        if self.extracted_features is not None:
+            self.verify_feature_extraction()
+        
+        if save_to_file:
+            try:
+                import datetime
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"emg_verification_report_{timestamp}.txt"
+                
+                # This is a placeholder - in a real implementation,
+                # you'd capture the print output to save to file
+                print(f"\n✓ Verification report would be saved to: {filename}")
+                print(f"  (Note: File saving not implemented in this version)")
+                
+            except Exception as e:
+                print(f"Error saving report: {e}")
+    
+    def extract_rms(self, signal):
+        """
+        Extract Root Mean Square (RMS) feature - measure of signal magnitude.
+        
+        Parameters:
+        signal: numpy array, EMG signal window
+        
+        Returns:
+        float: RMS value
+        """
+        return np.sqrt(np.mean(signal**2))
+    
+    def extract_mav(self, signal):
+        """
+        Extract Mean Absolute Value (MAV) feature - average amplitude.
+        
+        Parameters:
+        signal: numpy array, EMG signal window
+        
+        Returns:
+        float: MAV value
+        """
+        return np.mean(np.abs(signal))
+    
+    def extract_zc(self, signal, threshold=0.01):
+        """
+        Extract Zero Crossings (ZC) feature - count of oscillations around zero.
+        
+        Parameters:
+        signal: numpy array, EMG signal window
+        threshold: float, threshold to avoid noise-induced crossings
+        
+        Returns:
+        int: Number of zero crossings
+        """
+        zc_count = 0
+        for i in range(len(signal) - 1):
+            if abs(signal[i]) > threshold and abs(signal[i+1]) > threshold:
+                if signal[i] * signal[i+1] < 0:
+                    zc_count += 1
+        return zc_count
+    
+    def extract_ssc(self, signal, threshold=0.01):
+        """
+        Extract Slope Sign Changes (SSC) feature - count of slope direction changes.
+        
+        Parameters:
+        signal: numpy array, EMG signal window
+        threshold: float, threshold to avoid noise-induced changes
+        
+        Returns:
+        int: Number of slope sign changes
+        """
+        ssc_count = 0
+        for i in range(1, len(signal) - 1):
+            slope1 = signal[i] - signal[i-1]
+            slope2 = signal[i+1] - signal[i]
+            
+            if (slope1 * slope2 < 0) and (abs(slope1) > threshold or abs(slope2) > threshold):
+                ssc_count += 1
+        
+        return ssc_count
+    
+    def extract_wl(self, signal):
+        """
+        Extract Waveform Length (WL) feature - total signal variation over time window.
+        
+        Parameters:
+        signal: numpy array, EMG signal window
+        
+        Returns:
+        float: Waveform length value
+        """
+        return np.sum(np.abs(np.diff(signal)))
+    
+    def extract_features_from_window(self, window_data, zc_threshold=0.01, ssc_threshold=0.01):
+        """
+        Extract all 5 features from a single window.
+        
+        Parameters:
+        window_data: numpy array, EMG signal window (samples x channels)
+        zc_threshold: float, threshold for zero crossings
+        ssc_threshold: float, threshold for slope sign changes
+        
+        Returns:
+        dict: Dictionary containing all extracted features
+        """
+        if window_data.ndim == 1:
+            window_data = window_data[:, np.newaxis]
+        
+        n_channels = window_data.shape[1]
+        features = {
+            'RMS': [],
+            'MAV': [],
+            'ZC': [],
+            'SSC': [],
+            'WL': []
+        }
+        
+        # Extract features for each channel
+        for ch in range(n_channels):
+            channel_data = window_data[:, ch]
+            
+            features['RMS'].append(self.extract_rms(channel_data))
+            features['MAV'].append(self.extract_mav(channel_data))
+            features['ZC'].append(self.extract_zc(channel_data, zc_threshold))
+            features['SSC'].append(self.extract_ssc(channel_data, ssc_threshold))
+            features['WL'].append(self.extract_wl(channel_data))
+        
+        return features
+    
+    def extract_windowed_features_optimal(self, window_size=None, overlap=None, 
+                                         zc_threshold=0.01, ssc_threshold=0.01):
+        """
+        Extract features with optimal pipeline stages (Option 1):
+        - ZC and SSC: Extract from pre-rectification signal (preserves bipolar nature)
+        - RMS, MAV, WL: Extract from post-rectification signal (better amplitude features)
+        
+        This approach maximizes feature quality by extracting each feature at the 
+        most appropriate stage of the signal processing pipeline.
+        
+        Parameters:
+        window_size: int, window size in samples (if None, uses default)
+        overlap: float, overlap ratio 0-1 (if None, uses default)
+        zc_threshold: float, threshold for zero crossings
+        ssc_threshold: float, threshold for slope sign changes
+        
+        Returns:
+        dict: Dictionary containing feature matrices and window information
+        """
+        if self.original_signal is None:
+            print("No signal loaded. Please load a file first.")
+            return None
+        
+        # Use provided parameters or defaults
+        if window_size is None:
+            window_size = self.window_size
+        if overlap is None:
+            overlap = self.overlap
+        
+        step_size = int(window_size * (1 - overlap))
+        n_samples, n_channels = self.original_signal.shape
+        
+        print(f"\nExtracting features with OPTIMAL pipeline stages:")
+        print(f"  ZC & SSC: From pre-rectification signal (preserves bipolar crossings)")
+        print(f"  RMS, MAV & WL: From post-rectification signal (better amplitude features)")
+        print(f"  Window size: {window_size} samples ({window_size/self.fs:.3f} seconds)")
+        print(f"  Overlap: {overlap*100:.0f}%")
+        print(f"  Step size: {step_size} samples ({step_size/self.fs:.3f} seconds)")
+        
+        # Prepare signals at different processing stages
+        # Stage 1: Pre-rectification (for ZC and SSC)
+        pre_rect_signal = self.original_signal.copy()
+        
+        # Apply initial filters (bandpass, notch, DC removal) but NOT rectification
+        print("  Preparing pre-rectification signal for ZC/SSC...")
+        from scipy.signal import butter, filtfilt, iirnotch
+        
+        # Bandpass filter (20-500 Hz)
+        nyq = 0.5 * self.fs
+        low = 20.0 / nyq
+        high = min(500.0 / nyq, 0.99)
+        b, a = butter(4, [low, high], btype='band')
+        pre_rect_signal = filtfilt(b, a, pre_rect_signal, axis=0)
+        
+        # Notch filter (50 Hz)
+        b, a = iirnotch(50, 30, self.fs)
+        pre_rect_signal = filtfilt(b, a, pre_rect_signal, axis=0)
+        
+        # DC removal
+        pre_rect_signal = pre_rect_signal - np.mean(pre_rect_signal, axis=0)
+        
+        # Stage 2: Post-rectification (for RMS, MAV, WL)
+        post_rect_signal = np.abs(pre_rect_signal)  # Apply rectification
+        
+        # Low-pass envelope filter (6 Hz)
+        normal_cutoff = min(6.0 / nyq, 0.99)
+        b, a = butter(4, normal_cutoff, btype='low')
+        post_rect_signal = filtfilt(b, a, post_rect_signal, axis=0)
+        
+        print(f"  ✓ Pre-rectification signal prepared (range: {np.min(pre_rect_signal):.4f} to {np.max(pre_rect_signal):.4f})")
+        print(f"  ✓ Post-rectification signal prepared (range: {np.min(post_rect_signal):.4f} to {np.max(post_rect_signal):.4f})")
+        
+        # Initialize feature storage
+        rms_values = []
+        mav_values = []
+        zc_values = []
+        ssc_values = []
+        wl_values = []
+        window_centers = []
+        
+        # Extract features from each window
+        window_count = 0
+        for start in range(0, n_samples - window_size + 1, step_size):
+            end = start + window_size
+            
+            # Get window data from both signal stages
+            pre_rect_window = pre_rect_signal[start:end, :]
+            post_rect_window = post_rect_signal[start:end, :]
+            
+            # Extract ZC and SSC from pre-rectification signal
+            zc_features = []
+            ssc_features = []
+            for ch in range(n_channels):
+                zc_features.append(self.extract_zc(pre_rect_window[:, ch], zc_threshold))
+                ssc_features.append(self.extract_ssc(pre_rect_window[:, ch], ssc_threshold))
+            
+            # Extract RMS, MAV, WL from post-rectification signal
+            rms_features = []
+            mav_features = []
+            wl_features = []
+            for ch in range(n_channels):
+                rms_features.append(self.extract_rms(post_rect_window[:, ch]))
+                mav_features.append(self.extract_mav(post_rect_window[:, ch]))
+                wl_features.append(self.extract_wl(post_rect_window[:, ch]))
+            
+            # Store features
+            rms_values.append(rms_features)
+            mav_values.append(mav_features)
+            zc_values.append(zc_features)
+            ssc_values.append(ssc_features)
+            wl_values.append(wl_features)
+            window_centers.append(start + window_size // 2)
+            window_count += 1
+        
+        # Convert to numpy arrays
+        self.extracted_features = {
+            'RMS': np.array(rms_values),
+            'MAV': np.array(mav_values),
+            'ZC': np.array(zc_values),
+            'SSC': np.array(ssc_values),
+            'WL': np.array(wl_values)
+        }
+        
+        self.window_centers = np.array(window_centers)
+        
+        # Create feature matrix (n_windows x n_features)
+        feature_list = []
+        for feature_name in ['RMS', 'MAV', 'ZC', 'SSC', 'WL']:
+            feature_list.append(self.extracted_features[feature_name])
+        self.feature_matrix = np.concatenate(feature_list, axis=1)
+        
+        print(f"  ✓ Extracted OPTIMAL features from {window_count} windows")
+        print(f"  Feature matrix shape: {self.feature_matrix.shape} (windows x features)")
+        print(f"  Features per window: {self.feature_matrix.shape[1]} ({n_channels} channels x 5 features)")
+        
+        # Print feature quality summary
+        print(f"\n  FEATURE QUALITY SUMMARY:")
+        for feature_name in ['ZC', 'SSC']:
+            values = self.extracted_features[feature_name]
+            non_zero_pct = np.mean(values > 0) * 100
+            print(f"    {feature_name}: {non_zero_pct:.1f}% of windows have non-zero values")
+            print(f"         Range: [{np.min(values):.0f}, {np.max(values):.0f}], Mean: {np.mean(values):.2f}")
+        
+        return {
+            'features': self.extracted_features,
+            'feature_matrix': self.feature_matrix,
+            'window_centers': self.window_centers,
+            'window_count': window_count,
+            'window_size': window_size,
+            'overlap': overlap,
+            'extraction_method': 'optimal_dual_stage'
+        }
+    
+    def extract_windowed_features(self, signal=None, window_size=None, overlap=None, 
+                                zc_threshold=0.01, ssc_threshold=0.01):
+        """
+        Extract features from overlapping windows of the signal (legacy method).
+        
+        NOTE: This is the original single-stage extraction method. For better feature quality,
+        use extract_windowed_features_optimal() which extracts ZC/SSC before rectification
+        and RMS/MAV/WL after rectification.
+        
+        Parameters:
+        signal: numpy array, EMG signal (if None, uses filtered_signal)
+        window_size: int, window size in samples (if None, uses default)
+        overlap: float, overlap ratio 0-1 (if None, uses default)
+        zc_threshold: float, threshold for zero crossings
+        ssc_threshold: float, threshold for slope sign changes
+        
+        Returns:
+        dict: Dictionary containing feature matrices and window information
+        """
+        # Use provided signal or default to filtered signal
+        if signal is None:
+            if self.filtered_signal is None:
+                print("No signal available for feature extraction. Apply filters first.")
+                return None
+            signal = self.filtered_signal
+        
+        # Use provided parameters or defaults
+        if window_size is None:
+            window_size = self.window_size
+        if overlap is None:
+            overlap = self.overlap
+        
+        step_size = int(window_size * (1 - overlap))
+        
+        if signal.ndim == 1:
+            signal = signal[:, np.newaxis]
+        
+        n_samples, n_channels = signal.shape
+        
+        print(f"\nExtracting features with windowing (LEGACY method):")
+        print(f"  WARNING: Using single-stage extraction. For better ZC/SSC quality,")
+        print(f"           use extract_windowed_features_optimal() instead.")
+        print(f"  Window size: {window_size} samples ({window_size/self.fs:.3f} seconds)")
+        print(f"  Overlap: {overlap*100:.0f}%")
+        print(f"  Step size: {step_size} samples ({step_size/self.fs:.3f} seconds)")
+        
+        # Initialize feature storage
+        rms_values = []
+        mav_values = []
+        zc_values = []
+        ssc_values = []
+        wl_values = []
+        window_centers = []
+        
+        # Extract features from each window
+        window_count = 0
+        for start in range(0, n_samples - window_size + 1, step_size):
+            end = start + window_size
+            window_data = signal[start:end, :]
+            
+            # Extract features for this window
+            features = self.extract_features_from_window(window_data, zc_threshold, ssc_threshold)
+            
+            rms_values.append(features['RMS'])
+            mav_values.append(features['MAV'])
+            zc_values.append(features['ZC'])
+            ssc_values.append(features['SSC'])
+            wl_values.append(features['WL'])
+            window_centers.append(start + window_size // 2)
+            window_count += 1
+        
+        # Convert to numpy arrays
+        self.extracted_features = {
+            'RMS': np.array(rms_values),
+            'MAV': np.array(mav_values),
+            'ZC': np.array(zc_values),
+            'SSC': np.array(ssc_values),
+            'WL': np.array(wl_values)
+        }
+        
+        self.window_centers = np.array(window_centers)
+        
+        # Create feature matrix (n_windows x n_features)
+        feature_list = []
+        for feature_name in ['RMS', 'MAV', 'ZC', 'SSC', 'WL']:
+            feature_list.append(self.extracted_features[feature_name])
+        self.feature_matrix = np.concatenate(feature_list, axis=1)
+        
+        print(f"  ✓ Extracted features from {window_count} windows")
+        print(f"  Feature matrix shape: {self.feature_matrix.shape} (windows x features)")
+        print(f"  Features per window: {self.feature_matrix.shape[1]} ({n_channels} channels x 5 features)")
+        
+        return {
+            'features': self.extracted_features,
+            'feature_matrix': self.feature_matrix,
+            'window_centers': self.window_centers,
+            'window_count': window_count,
+            'window_size': window_size,
+            'overlap': overlap,
+            'extraction_method': 'legacy_single_stage'
+        }
+    
+    def plot_features(self, plot_duration=10.0, channel=None):
+        """
+        Plot extracted features over time with filtered signal for comparison.
+        
+        Parameters:
+        plot_duration: float, duration to plot in seconds (0 for all)
+        channel: int, specific channel to plot (None for all channels individually)
+        """
+        if self.extracted_features is None:
+            print("No features extracted yet. Run feature extraction first.")
+            return
+        
+        if self.filtered_signal is None:
+            print("No filtered signal available for comparison.")
+            return
+        
+        # Determine which channels to plot
+        if channel is not None:
+            if 0 <= channel < self.num_channels:
+                channels_to_plot = [channel]
+            else:
+                print(f"Invalid channel {channel}. Valid range: 0-{self.num_channels-1}")
+                return
+        else:
+            # Plot all channels individually (limit to 4 for readability)
+            channels_to_plot = list(range(min(4, self.num_channels)))
+        
+        # Calculate time vectors
+        time_features = self.window_centers / self.fs
+        time_signal = np.arange(self.filtered_signal.shape[0]) / self.fs
+        
+        # Apply duration limit
+        if plot_duration > 0:
+            feature_mask = time_features <= plot_duration
+            signal_mask = time_signal <= plot_duration
+            time_features = time_features[feature_mask]
+            time_signal = time_signal[signal_mask]
+            filtered_signal_plot = self.filtered_signal[signal_mask, :]
+        else:
+            feature_mask = slice(None)
+            filtered_signal_plot = self.filtered_signal
+        
+        feature_names = ['RMS', 'MAV', 'ZC', 'SSC', 'WL']
+        
+        # Plot each channel individually
+        for ch_idx, ch in enumerate(channels_to_plot):
+            # Create figure for this channel (6 subplots: 1 filtered signal + 5 features)
+            fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+            axes = axes.flatten()
+            
+            # Plot 1: Filtered signal for this channel
+            axes[0].plot(time_signal, filtered_signal_plot[:, ch], 
+                        color='black', linewidth=0.8, alpha=0.7)
+            axes[0].set_title(f'Filtered EMG Signal - Channel {ch+1}', 
+                             fontsize=12, fontweight='bold')
+            axes[0].set_xlabel('Time (seconds)')
+            axes[0].set_ylabel('Amplitude')
+            axes[0].grid(True, alpha=0.3)
+            
+            # Add filter history as text
+            if self.filter_history:
+                filter_text = ' → '.join(self.filter_history)
+                axes[0].text(0.02, 0.98, f'Filters: {filter_text}', 
+                            transform=axes[0].transAxes, fontsize=8,
+                            verticalalignment='top', bbox=dict(boxstyle='round', 
+                            facecolor='wheat', alpha=0.8))
+            
+            # Plot 2-6: Features for this channel
+            colors = ['red', 'green', 'orange', 'purple', 'brown']
+            
+            for i, feature_name in enumerate(feature_names):
+                ax = axes[i+1]
+                
+                if self.extracted_features[feature_name].shape[1] > ch:
+                    feature_data = self.extracted_features[feature_name][feature_mask, ch]
+                    ax.plot(time_features, feature_data, 
+                           color=colors[i], linewidth=2, marker='o', markersize=3)
+                    ax.fill_between(time_features, feature_data, alpha=0.3, color=colors[i])
+                
+                ax.set_title(f'{feature_name} - Channel {ch+1}', fontsize=12, fontweight='bold')
+                ax.set_xlabel('Time (seconds)')
+                ax.set_ylabel(f'{feature_name} Value')
+                ax.grid(True, alpha=0.3)
+                
+                # Add statistics as text
+                if self.extracted_features[feature_name].shape[1] > ch:
+                    values = self.extracted_features[feature_name][:, ch]
+                    stats_text = f'Mean: {np.mean(values):.3f}\nStd: {np.std(values):.3f}'
+                    ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, 
+                           fontsize=8, verticalalignment='top',
+                           bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
+            
+            plt.tight_layout()
+            plt.suptitle(f'EMG Analysis - Channel {ch+1}\n'
+                        f'Window: {self.window_size/self.fs:.3f}s, Overlap: {self.overlap*100:.0f}%', 
+                        fontsize=14, fontweight='bold', y=0.98)
+            plt.show()
+        
+        # Print summary statistics for plotted channels
+        print(f"\n{'='*60}")
+        print(f"FEATURE SUMMARY FOR PLOTTED CHANNELS")
+        print(f"{'='*60}")
+        
+        for ch in channels_to_plot:
+            print(f"\nChannel {ch+1}:")
+            for feature_name in feature_names:
+                if self.extracted_features[feature_name].shape[1] > ch:
+                    values = self.extracted_features[feature_name][:, ch]
+                    print(f"  {feature_name}: Mean={np.mean(values):.4f}, "
+                          f"Range=[{np.min(values):.4f}, {np.max(values):.4f}]")
+    
+    def plot_features_overview(self, plot_duration=10.0):
+        """
+        Plot overview of all features with all channels overlayed (original behavior).
+        
+        Parameters:
+        plot_duration: float, duration to plot in seconds
+        """
+        if self.extracted_features is None:
+            print("No features extracted yet. Run feature extraction first.")
+            return
+        
+        # Calculate time vector for features
+        time_features = self.window_centers / self.fs
+        
+        # Limit plot duration
+        if plot_duration > 0:
+            plot_mask = time_features <= plot_duration
+            time_features = time_features[plot_mask]
+        else:
+            plot_mask = slice(None)
+        
+        # Determine number of channels to plot (max 4)
+        channels_to_plot = min(4, self.num_channels)
+        colors = ['blue', 'red', 'green', 'orange']
+        
+        # Create subplot for each feature
+        fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+        axes = axes.flatten()
+        
+        feature_names = ['RMS', 'MAV', 'ZC', 'SSC', 'WL']
+        
+        for i, feature_name in enumerate(feature_names):
+            ax = axes[i]
+            
+            # Plot each channel
+            for ch in range(channels_to_plot):
+                if self.extracted_features[feature_name].shape[1] > ch:
+                    feature_data = self.extracted_features[feature_name][plot_mask, ch]
+                    ax.plot(time_features, feature_data, 
+                           color=colors[ch % len(colors)], 
+                           label=f'Ch {ch+1}', linewidth=1.5, marker='o', markersize=2)
+            
+            ax.set_title(f'{feature_name} Feature - All Channels', fontsize=12, fontweight='bold')
+            ax.set_xlabel('Time (seconds)')
+            ax.set_ylabel(f'{feature_name} Value')
+            ax.grid(True, alpha=0.3)
+            if channels_to_plot <= 4:
+                ax.legend(fontsize=8)
+        
+        # Remove the empty subplot
+        fig.delaxes(axes[5])
+        
+        plt.tight_layout()
+        plt.suptitle('EMG Features Overview - All Channels', fontsize=16, fontweight='bold', y=0.98)
+        plt.show()
+        
+        # Print feature statistics
+        self.print_feature_statistics()
+    
+    def plot_single_channel_detailed(self, channel, plot_duration=10.0):
+        """
+        Plot detailed analysis for a single channel with filtered signal and all features.
+        
+        Parameters:
+        channel: int, channel number (0-indexed)
+        plot_duration: float, duration to plot in seconds
+        """
+        if channel < 0 or channel >= self.num_channels:
+            print(f"Invalid channel {channel}. Valid range: 0-{self.num_channels-1}")
+            return
+        
+        self.plot_features(plot_duration=plot_duration, channel=channel)
+        """
+        Print statistical summary of extracted features.
+        """
+        if self.extracted_features is None:
+            print("No features extracted yet.")
+            return
+        
+        print(f"\n{'='*60}")
+        print("FEATURE STATISTICS SUMMARY")
+        print(f"{'='*60}")
+        
+        feature_names = ['RMS', 'MAV', 'ZC', 'SSC', 'WL']
+        for feature_name in feature_names:
+            values = self.extracted_features[feature_name]
+            print(f"\n{feature_name}:")
+            for ch in range(self.num_channels):
+                if values.shape[1] > ch:
+                    ch_values = values[:, ch]
+                    print(f"  Channel {ch+1}: Mean={np.mean(ch_values):.4f}, "
+                          f"Std={np.std(ch_values):.4f}, "
+                          f"Min={np.min(ch_values):.4f}, "
+                          f"Max={np.max(ch_values):.4f}")
+    
+    def save_features_to_csv(self, filename=None):
+        """
+        Save extracted features to CSV file.
+        
+        Parameters:
+        filename: str, output filename (if None, auto-generate)
+        """
+        if self.extracted_features is None:
+            print("No features extracted yet.")
+            return
+        
+        if filename is None:
+            filename = "emg_features.csv"
+        
+        try:
+            # Create DataFrame with feature data
+            data = []
+            feature_names = ['RMS', 'MAV', 'ZC', 'SSC', 'WL']
+            
+            for window_idx in range(len(self.window_centers)):
+                row = {'Window': window_idx + 1, 
+                       'Time_s': self.window_centers[window_idx] / self.fs}
+                
+                for feature_name in feature_names:
+                    for ch in range(self.num_channels):
+                        col_name = f'{feature_name}_Ch{ch+1}'
+                        row[col_name] = self.extracted_features[feature_name][window_idx, ch]
+                
+                data.append(row)
+            
+            df = pd.DataFrame(data)
+            df.to_csv(filename, index=False)
+            
+            print(f"\n✓ Features saved to {filename}")
+            print(f"  Shape: {df.shape}")
+            print(f"  Columns: {list(df.columns)}")
+            
+        except Exception as e:
+            print(f"✗ Error saving features: {e}")
+    
+    def apply_complete_pipeline(self):
+        """Apply all 5 filters in the recommended order."""
+        print(f"\n{'='*60}")
+        print("APPLYING COMPLETE EMG FILTERING PIPELINE")
+        print(f"{'='*60}")
+        
+        # Recommended order for EMG processing:
+        self.bandpass_filter(20, 500)      # 1. Remove baseline drift and high-freq noise
+        self.notch_filter(50)              # 2. Remove power line interference
+        self.dc_removal_filter()           # 3. Remove any remaining DC offset
+        self.rectification_filter()        # 4. Get signal envelope
+        self.lowpass_envelope_filter(6)    # 5. Smooth envelope
+        
+        print(f"\n✓ Complete pipeline applied successfully!")
+        print(f"Applied filters: {' → '.join(self.filter_history)}")
+    
+    def reset_signal(self):
+        """Reset filtered signal to original."""
+        if self.original_signal is not None:
+            self.filtered_signal = self.original_signal.copy()
+            self.filter_history = []
+            print("\n✓ Signal reset to original")
+        else:
+            print("\n✗ No original signal loaded")
+    
+    def plot_results(self, plot_duration=10.0):
+        """
+        Plot original vs filtered signal for comparison.
+        
+        Parameters:
+        plot_duration: float, duration to plot in seconds
+        """
+        if self.original_signal is None:
+            print("No signal loaded for plotting")
+            return
+        
+        # Calculate samples to plot
+        plot_samples = int(min(plot_duration * self.fs, self.original_signal.shape[0]))
+        time_vector = np.arange(plot_samples) / self.fs
+        
+        # Determine number of channels to plot (max 4 for readability)
+        channels_to_plot = min(4, self.num_channels)
+        
+        fig, axes = plt.subplots(channels_to_plot, 2, figsize=(15, 3*channels_to_plot))
+        if channels_to_plot == 1:
+            axes = axes.reshape(1, -1)
+        
+        colors = ['blue', 'red', 'green', 'orange']
+        
+        for ch in range(channels_to_plot):
+            # Original signal
+            axes[ch, 0].plot(time_vector, self.original_signal[:plot_samples, ch], 
+                           color=colors[ch], alpha=0.8, linewidth=0.8)
+            axes[ch, 0].set_title(f'Original EMG - Channel {ch+1}')
+            axes[ch, 0].set_xlabel('Time (seconds)')
+            axes[ch, 0].set_ylabel('Amplitude')
+            axes[ch, 0].grid(True, alpha=0.3)
+            
+            # Filtered signal
+            axes[ch, 1].plot(time_vector, self.filtered_signal[:plot_samples, ch], 
+                           color=colors[ch], alpha=0.8, linewidth=0.8)
+            axes[ch, 1].set_title(f'Filtered EMG - Channel {ch+1}')
+            axes[ch, 1].set_xlabel('Time (seconds)')
+            axes[ch, 1].set_ylabel('Amplitude')
+            axes[ch, 1].grid(True, alpha=0.3)
+        
+        filter_text = ' → '.join(self.filter_history) if self.filter_history else 'No filters applied'
+        plt.suptitle(f'EMG Filtering Results\nApplied: {filter_text}', 
+                     fontsize=14, fontweight='bold')
+        
+        plt.tight_layout()
+        plt.show()
+        
+        # Print signal statistics
+        print(f"\n{'='*50}")
+        print("SIGNAL STATISTICS")
+        print(f"{'='*50}")
+        print(f"Original signal:")
+        print(f"  Range: {np.min(self.original_signal):.6f} to {np.max(self.original_signal):.6f}")
+        print(f"  Mean: {np.mean(self.original_signal):.6f}")
+        print(f"  Std: {np.std(self.original_signal):.6f}")
+        
+        print(f"\nFiltered signal:")
+        print(f"  Range: {np.min(self.filtered_signal):.6f} to {np.max(self.filtered_signal):.6f}")
+        print(f"  Mean: {np.mean(self.filtered_signal):.6f}")
+        print(f"  Std: {np.std(self.filtered_signal):.6f}")
+        
+        print(f"\nApplied filters: {len(self.filter_history)}")
+        for i, filter_name in enumerate(self.filter_history, 1):
+            print(f"  {i}. {filter_name}")
+
+def display_menu():
+    """Display the filtering and feature extraction options menu."""
+    print(f"\n{'='*70}")
+    print("EMG FILTERING & FEATURE EXTRACTION OPTIONS")
+    print(f"{'='*70}")
+    print("FILTERING:")
+    print("1. Bandpass filter (20-500 Hz) - Remove baseline drift & high-freq noise")
+    print("2. Notch filter (50-60 Hz) - Remove power line interference") 
+    print("3. DC removal - Remove constant offset")
+    print("4. Rectification - Apply absolute value")
+    print("5. Low-pass envelope (2-6 Hz) - Smooth signal")
+    print("6. Apply complete filtering pipeline (all filters in order)")
+    print("")
+    print("FEATURE EXTRACTION:")
+    print("7. Extract features - OPTIMAL method (ZC/SSC pre-rect, RMS/MAV/WL post-rect)")
+    print("8. Extract features - LEGACY method (all features from filtered signal)")
+    print("9. Plot features (individual channels with filtered signal)")
+    print("10. Plot features overview (all channels overlayed)")
+    print("11. Plot single channel detailed analysis")
+    print("12. Save features to CSV")
+    print("")
+    print("VERIFICATION & VALIDATION:")
+    print("13. Verify filtering pipeline")
+    print("14. Verify feature extraction")
+    print("15. Generate comprehensive verification report")
+    print("")
+    print("UTILITIES:")
+    print("16. Plot filtered signal only")
+    print("17. Reset signal to original")
+    print("18. Load new file")
+    print("0. Exit")
+    print(f"{'='*70}")
+
+def get_user_choice():
+    """Get user's menu choice with input validation."""
+    while True:
+        try:
+            choice = int(input("\nEnter your choice (0-18): "))
+            if 0 <= choice <= 18:
+                return choice
+            else:
+                print("Please enter a number between 0 and 18.")
+        except ValueError:
+            print("Please enter a valid number.")
+
+def get_filter_parameters():
+    """Get custom filter parameters from user."""
+    print("\nWould you like to use default parameters or customize?")
+    print("1. Use defaults")
+    print("2. Customize parameters")
+    
+    while True:
+        try:
+            param_choice = int(input("Choice (1-2): "))
+            if param_choice in [1, 2]:
+                return param_choice == 2
+            else:
+                print("Please enter 1 or 2.")
+        except ValueError:
+            print("Please enter a valid number.")
+
+def main():
+    """Main function to run the EMG filtering pipeline."""
+    
+    # Initialize pipeline
+    pipeline = EMGFilteringPipeline(fs=1000)
+    
+    # Load initial file
+    try:
+        if not pipeline.load_matlab_file():
+            return
+    except Exception as e:
+        print(f"Error loading file: {e}")
+        return
+    
+    # Main interaction loop
+    while True:
+        display_menu()
+        
+        # Show current filter status
+        if pipeline.filter_history:
+            print(f"\nCurrent filters applied: {' → '.join(pipeline.filter_history)}")
+        else:
+            print(f"\nNo filters applied yet")
+        
+        choice = get_user_choice()
+        
+        if choice == 0:  # Exit
+            print("\nExiting EMG Filtering Pipeline. Goodbye!")
+            break
+            
+        elif choice == 1:  # Bandpass filter
+            customize = get_filter_parameters()
+            if customize:
+                try:
+                    lowcut = float(input("Enter low cutoff frequency (default 20 Hz): ") or 20)
+                    highcut = float(input("Enter high cutoff frequency (default 500 Hz): ") or 500)
+                    order = int(input("Enter filter order (default 4): ") or 4)
+                    pipeline.bandpass_filter(lowcut, highcut, order)
+                except ValueError:
+                    print("Invalid input, using defaults")
+                    pipeline.bandpass_filter()
+            else:
+                pipeline.bandpass_filter()
+        
+        elif choice == 2:  # Notch filter
+            customize = get_filter_parameters()
+            if customize:
+                try:
+                    freq = float(input("Enter notch frequency (50 Hz Europe, 60 Hz US): ") or 50)
+                    q = float(input("Enter Q factor (default 30): ") or 30)
+                    pipeline.notch_filter(freq, q)
+                except ValueError:
+                    print("Invalid input, using defaults")
+                    pipeline.notch_filter()
+            else:
+                pipeline.notch_filter()
+        
+        elif choice == 3:  # DC removal
+            pipeline.dc_removal_filter()
+        
+        elif choice == 4:  # Rectification
+            pipeline.rectification_filter()
+        
+        elif choice == 5:  # Low-pass envelope
+            customize = get_filter_parameters()
+            if customize:
+                try:
+                    cutoff = float(input("Enter cutoff frequency (default 6 Hz): ") or 6)
+                    order = int(input("Enter filter order (default 4): ") or 4)
+                    pipeline.lowpass_envelope_filter(cutoff, order)
+                except ValueError:
+                    print("Invalid input, using defaults")
+                    pipeline.lowpass_envelope_filter()
+            else:
+                pipeline.lowpass_envelope_filter()
+        
+        elif choice == 6:  # Complete filtering pipeline
+            pipeline.reset_signal()  # Start fresh
+            pipeline.apply_complete_pipeline()
+        
+        elif choice == 7:  # Extract features - OPTIMAL method
+            customize = get_filter_parameters()
+            if customize:
+                try:
+                    window_size = int(input(f"Enter window size in samples (default {pipeline.window_size}): ") or pipeline.window_size)
+                    overlap = float(input(f"Enter overlap ratio 0-1 (default {pipeline.overlap}): ") or pipeline.overlap)
+                    zc_thresh = float(input("Enter ZC threshold (default 0.01): ") or 0.01)
+                    ssc_thresh = float(input("Enter SSC threshold (default 0.01): ") or 0.01)
+                    pipeline.extract_windowed_features_optimal(window_size=window_size, overlap=overlap, 
+                                                             zc_threshold=zc_thresh, ssc_threshold=ssc_thresh)
+                except ValueError:
+                    print("Invalid input, using defaults")
+                    pipeline.extract_windowed_features_optimal()
+            else:
+                pipeline.extract_windowed_features_optimal()
+        
+        elif choice == 8:  # Extract features - LEGACY method
+            customize = get_filter_parameters()
+            if customize:
+                try:
+                    window_size = int(input(f"Enter window size in samples (default {pipeline.window_size}): ") or pipeline.window_size)
+                    overlap = float(input(f"Enter overlap ratio 0-1 (default {pipeline.overlap}): ") or pipeline.overlap)
+                    zc_thresh = float(input("Enter ZC threshold (default 0.01): ") or 0.01)
+                    ssc_thresh = float(input("Enter SSC threshold (default 0.01): ") or 0.01)
+                    pipeline.extract_windowed_features(window_size=window_size, overlap=overlap, 
+                                                     zc_threshold=zc_thresh, ssc_threshold=ssc_thresh)
+                except ValueError:
+                    print("Invalid input, using defaults")
+                    pipeline.extract_windowed_features()
+            else:
+                pipeline.extract_windowed_features()
+        
+        elif choice == 9:  # Plot features (individual channels)
+            try:
+                duration = float(input("Enter plot duration in seconds (default 10, 0 for all): ") or 10)
+                pipeline.plot_features(duration)
+            except ValueError:
+                pipeline.plot_features()
+        
+        elif choice == 10:  # Plot features overview (all channels overlayed)
+            try:
+                duration = float(input("Enter plot duration in seconds (default 10, 0 for all): ") or 10)
+                pipeline.plot_features_overview(duration)
+            except ValueError:
+                pipeline.plot_features_overview()
+        
+        elif choice == 11:  # Plot single channel detailed
+            if pipeline.num_channels == 0:
+                print("No data loaded. Please load a file first.")
+            else:
+                try:
+                    print(f"Available channels: 0 to {pipeline.num_channels-1}")
+                    channel = int(input(f"Enter channel number (0-{pipeline.num_channels-1}): "))
+                    if 0 <= channel < pipeline.num_channels:
+                        duration = float(input("Enter plot duration in seconds (default 10, 0 for all): ") or 10)
+                        pipeline.plot_single_channel_detailed(channel, duration)
+                    else:
+                        print(f"Invalid channel {channel}. Valid range: 0-{pipeline.num_channels-1}")
+                except ValueError:
+                    print("Invalid input. Please enter valid numbers.")
+        
+        elif choice == 12:  # Save features to CSV
+            try:
+                filename = input("Enter filename (default 'emg_features.csv'): ") or "emg_features.csv"
+                if not filename.endswith('.csv'):
+                    filename += '.csv'
+                pipeline.save_features_to_csv(filename)
+            except Exception as e:
+                print(f"Error saving features: {e}")
+        
+        elif choice == 13:  # Verify filtering pipeline
+            pipeline.verify_filtering_pipeline()
+        
+        elif choice == 14:  # Verify feature extraction
+            pipeline.verify_feature_extraction()
+        
+        elif choice == 15:  # Generate comprehensive verification report
+            try:
+                save_report = input("Save report to file? (y/n, default: y): ").lower()
+                save_to_file = save_report != 'n'
+                pipeline.create_verification_report(save_to_file)
+            except Exception as e:
+                print(f"Error generating report: {e}")
+        
+        elif choice == 16:  # Plot filtered signal only
+            try:
+                duration = float(input("Enter plot duration in seconds (default 10): ") or 10)
+                pipeline.plot_results(duration)
+            except ValueError:
+                pipeline.plot_results()
+        
+        elif choice == 17:  # Reset signal
+            pipeline.reset_signal()
+        
+        elif choice == 18:  # Load new file
+            try:
+                pipeline.load_matlab_file()
+            except Exception as e:
+                print(f"Error loading new file: {e}")
+
+if __name__ == "__main__":
+    main()
