@@ -26,9 +26,17 @@ Part 1: (1st of October)
    - Implement a small Python program to simulate reading inputs and mapping them
    - Send Python commands to Arduino over serial
 
+10/9/20205
+
+1. Modify the current code to be separated into files
+2. Build the ML file based on the current state
+3. Build a file to save the data and then train the ML
+
 Part 2: Hardware & Integration (October 15th-22nd)
 1. Acquire EMG hardware
    - Servos, battery pack, mounting equipment, wires
 2. 
 Part 3: Testing, validation, & deployment (Nov 27th)
-  
+
+
+
