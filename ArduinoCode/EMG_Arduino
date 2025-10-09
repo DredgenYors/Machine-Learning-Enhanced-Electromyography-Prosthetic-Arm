@@ -14,10 +14,10 @@ void loop() {
   // Read sensor Value
   sensorValue = analogRead(A0)
 
-  Serial.print(0)
-  Serial.print("")
-  Serial.print(1000)
-  Serial.print("")
+  Serial.print(0);
+  Serial.print("");
+  Serial.print(1000);
+  Serial.print("");
 
   // Print value to Serial Monitor
   Serial.println(sensorValue);
