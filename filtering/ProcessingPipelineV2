@@ -1,16 +1,86 @@
 import scipy.io
+import os
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.signal import butter, filtfilt, iirnotch
 from tkinter import Tk
 from tkinter.filedialog import askopenfilename
 import pandas as pd
+import zipfile
+import glob
+import shutil
 
 # -------------------------------
 # EMG Filtering & Feature Extraction Pipeline
 # -------------------------------
 
 class EMGFilteringPipeline:
+    # Mapping from exercise number to description
+    EXERCISE_LABELS = {
+        1: "Thumb flexion/extension",
+        2: "Index flexion/extension",
+        3: "Middle flexion/extension",
+        4: "Ring flexion/extension",
+        5: "Little flexion/extension",
+        6: "Thumb–index pinch",
+        7: "Thumb–middle pinch",
+        8: "Thumb–ring pinch",
+        9: "Thumb–little pinch",
+        10: "Thumb abduction/adduction",
+        11: "Fingers flexion together",
+        12: "Fingers extension together",
+        13: "Fist (hand close)",
+        14: "Hand open",
+        15: "Pointing index",
+        16: "Pointing middle",
+        17: "Pointing ring",
+        18: "Pointing little",
+        19: "Thumb up",
+        20: "OK sign (thumb–index circle)",
+        21: "C shape (can grasp)",
+        22: "L shape (thumb + index extended)",
+        23: "Tripod grasp (thumb–index–middle)",
+        24: "Lateral grip (key grasp)",
+        25: "Power grip (whole hand)",
+        26: "Precision sphere grip",
+        27: "Hook grip (fingers flexed, thumb not used)",
+        28: "Pinch grip (tips of fingers)",
+        29: "Platform (flat hand, palm up)",
+        30: "Grasp a bottle",
+        31: "Pour from bottle",
+        32: "Drink from bottle",
+        33: "Open a bottle cap",
+        34: "Use a phone",
+        35: "Turn a key",
+        36: "Use a fork",
+        37: "Use a knife",
+        38: "Use a spoon",
+        39: "Write with a pen",
+        40: "Open a drawer",
+        41: "Close a drawer",
+        42: "Use scissors",
+        43: "Light switch on",
+        44: "Light switch off",
+        45: "Plug in cable",
+        46: "Unplug cable",
+        47: "Move a computer mouse",
+        48: "Type on a keyboard",
+        49: "Pick up coins",
+        50: "Count money",
+        51: "Open a jar",
+        52: "Close a jar"
+    }
+
+    def get_exercise_name(self):
+        """Return the exercise name for the loaded exercise number."""
+        if self.exercise is not None:
+            try:
+                # If exercise is an array, get the scalar value
+                ex_num = int(np.squeeze(self.exercise))
+                return self.EXERCISE_LABELS.get(ex_num, f"Unknown ({ex_num})")
+            except Exception:
+                return "Invalid exercise value"
+        return None
     """
     Complete EMG filtering and feature extraction pipeline with:
     
@@ -38,10 +108,18 @@ class EMGFilteringPipeline:
         """
         self.fs = fs
         self.original_signal = None
+    def __init__(self, fs=1000):
+        """
+        Initialize the filtering and feature extraction pipeline.
+        Parameters:
+        fs: int, sampling frequency in Hz
+        """
+        self.fs = fs
         self.filtered_signal = None
         self.filter_history = []
         self.num_channels = 0
-        
+        self.exercise = None  # Stores movement classification labels if available
+        self.selected_channels = None  # List of selected channel indices
         # Feature extraction variables
         self.extracted_features = None
         self.feature_matrix = None
@@ -69,6 +147,15 @@ class EMGFilteringPipeline:
             mat = scipy.io.loadmat(mat_file)
             emg = np.squeeze(mat['emg'])  # Load EMG data
             print(f"Loaded EMG data with shape: {emg.shape}")
+            # Try to load exercise variable if present
+            if 'exercise' in mat:
+                self.exercise = np.squeeze(mat['exercise'])
+                print(f"Loaded exercise variable: {self.exercise}")
+                ex_name = self.get_exercise_name()
+                print(f"Exercise label: {ex_name}")
+            else:
+                self.exercise = None
+                print("No 'exercise' variable found in file.")
         except Exception as e:
             print(f"Error loading file: {e}")
             return None
@@ -85,12 +172,35 @@ class EMGFilteringPipeline:
         
         # Initialize filtered signal as copy of original
         self.filtered_signal = self.original_signal.copy()
+
+        # Prompt user to select channels
+        self.selected_channels = self.prompt_channel_selection()
+        print(f"Selected channels: {self.selected_channels}")
         
         print(f"Signal shape: {self.original_signal.shape} (samples x channels)")
         print(f"Signal range: {np.min(self.original_signal):.6f} to {np.max(self.original_signal):.6f}")
         print(f"Sampling frequency: {self.fs} Hz")
         
         return True
+
+    def prompt_channel_selection(self):
+        """Prompt user to select channels to process."""
+        if self.num_channels == 1:
+            return [0]
+        print(f"\nAvailable channels: 0 to {self.num_channels-1}")
+        print("Enter channel numbers separated by commas (e.g., 0,2,4) or 'all' for all channels:")
+        while True:
+            user_input = input("Channels to use: ").strip()
+            if user_input.lower() == 'all':
+                return list(range(self.num_channels))
+            try:
+                channels = [int(x) for x in user_input.split(',') if x.strip().isdigit()]
+                if all(0 <= ch < self.num_channels for ch in channels) and channels:
+                    return channels
+                else:
+                    print(f"Invalid input. Please enter valid channel numbers between 0 and {self.num_channels-1}.")
+            except Exception:
+                print("Invalid input. Please enter channel numbers separated by commas or 'all'.")
     
     def bandpass_filter(self, lowcut=20, highcut=500, order=4):
         """
@@ -116,7 +226,13 @@ class EMGFilteringPipeline:
         
         # Apply filter
         try:
-            self.filtered_signal = filtfilt(b, a, self.filtered_signal, axis=0)
+            # Only filter selected channels
+            if self.selected_channels is not None:
+                filtered = self.filtered_signal.copy()
+                filtered[:, self.selected_channels] = filtfilt(b, a, filtered[:, self.selected_channels], axis=0)
+                self.filtered_signal = filtered
+            else:
+                self.filtered_signal = filtfilt(b, a, self.filtered_signal, axis=0)
             self.filter_history.append(f"Bandpass {lowcut}-{highcut} Hz")
             
             print(f"  ✓ Bandpass filter applied successfully")
@@ -140,7 +256,12 @@ class EMGFilteringPipeline:
             b, a = iirnotch(notch_freq, quality_factor, self.fs)
             
             # Apply filter
-            self.filtered_signal = filtfilt(b, a, self.filtered_signal, axis=0)
+            if self.selected_channels is not None:
+                filtered = self.filtered_signal.copy()
+                filtered[:, self.selected_channels] = filtfilt(b, a, filtered[:, self.selected_channels], axis=0)
+                self.filtered_signal = filtered
+            else:
+                self.filtered_signal = filtfilt(b, a, self.filtered_signal, axis=0)
             self.filter_history.append(f"Notch {notch_freq} Hz")
             
             print(f"  ✓ Notch filter applied successfully")
@@ -156,9 +277,15 @@ class EMGFilteringPipeline:
         print(f"\nApplying DC offset removal (mean subtraction)...")
         
         try:
-            # Calculate and subtract mean for each channel
-            dc_offset = np.mean(self.filtered_signal, axis=0)
-            self.filtered_signal = self.filtered_signal - dc_offset
+            # Calculate and subtract mean for each selected channel
+            filtered = self.filtered_signal.copy()
+            if self.selected_channels is not None:
+                dc_offset = np.mean(filtered[:, self.selected_channels], axis=0)
+                filtered[:, self.selected_channels] = filtered[:, self.selected_channels] - dc_offset
+            else:
+                dc_offset = np.mean(filtered, axis=0)
+                filtered = filtered - dc_offset
+            self.filtered_signal = filtered
             self.filter_history.append("DC removal")
             
             print(f"  ✓ DC offset removed successfully")
@@ -175,7 +302,12 @@ class EMGFilteringPipeline:
         print(f"\nApplying rectification (absolute value)...")
         
         try:
-            self.filtered_signal = np.abs(self.filtered_signal)
+            filtered = self.filtered_signal.copy()
+            if self.selected_channels is not None:
+                filtered[:, self.selected_channels] = np.abs(filtered[:, self.selected_channels])
+            else:
+                filtered = np.abs(filtered)
+            self.filtered_signal = filtered
             self.filter_history.append("Rectification")
             
             print(f"  ✓ Rectification applied successfully")
@@ -206,7 +338,12 @@ class EMGFilteringPipeline:
             b, a = butter(order, normal_cutoff, btype='low')
             
             # Apply filter
-            self.filtered_signal = filtfilt(b, a, self.filtered_signal, axis=0)
+            filtered = self.filtered_signal.copy()
+            if self.selected_channels is not None:
+                filtered[:, self.selected_channels] = filtfilt(b, a, filtered[:, self.selected_channels], axis=0)
+            else:
+                filtered = filtfilt(b, a, filtered, axis=0)
+            self.filtered_signal = filtered
             self.filter_history.append(f"Low-pass {cutoff} Hz")
             
             print(f"  ✓ Low-pass filter applied successfully")
@@ -770,7 +907,10 @@ class EMGFilteringPipeline:
             overlap = self.overlap
         
         step_size = int(window_size * (1 - overlap))
-        n_samples, n_channels = self.original_signal.shape
+        # Use only selected channels
+        channels = self.selected_channels if self.selected_channels is not None else list(range(self.original_signal.shape[1]))
+        n_samples = self.original_signal.shape[0]
+        n_channels = len(channels)
         
         print(f"\nExtracting features with OPTIMAL pipeline stages:")
         print(f"  ZC & SSC: From pre-rectification signal (preserves bipolar crossings)")
@@ -781,7 +921,7 @@ class EMGFilteringPipeline:
         
         # Prepare signals at different processing stages
         # Stage 1: Pre-rectification (for ZC and SSC)
-        pre_rect_signal = self.original_signal.copy()
+        pre_rect_signal = self.original_signal[:, channels].copy()
         
         # Apply initial filters (bandpass, notch, DC removal) but NOT rectification
         print("  Preparing pre-rectification signal for ZC/SSC...")
@@ -929,7 +1069,9 @@ class EMGFilteringPipeline:
         
         if signal.ndim == 1:
             signal = signal[:, np.newaxis]
-        
+        # Use only selected channels
+        channels = self.selected_channels if self.selected_channels is not None else list(range(signal.shape[1]))
+        signal = signal[:, channels]
         n_samples, n_channels = signal.shape
         
         print(f"\nExtracting features with windowing (LEGACY method):")
@@ -1011,16 +1153,18 @@ class EMGFilteringPipeline:
             print("No filtered signal available for comparison.")
             return
         
+        # Use only selected channels
+        channels_all = self.selected_channels if self.selected_channels is not None else list(range(self.num_channels))
         # Determine which channels to plot
         if channel is not None:
-            if 0 <= channel < self.num_channels:
+            if channel in channels_all:
                 channels_to_plot = [channel]
             else:
-                print(f"Invalid channel {channel}. Valid range: 0-{self.num_channels-1}")
+                print(f"Invalid channel {channel}. Valid range: {channels_all}")
                 return
         else:
-            # Plot all channels individually (limit to 4 for readability)
-            channels_to_plot = list(range(min(4, self.num_channels)))
+            # Plot all selected channels individually (limit to 4 for readability)
+            channels_to_plot = channels_all[:4]
         
         # Calculate time vectors
         time_features = self.window_centers / self.fs
@@ -1030,12 +1174,14 @@ class EMGFilteringPipeline:
         if plot_duration > 0:
             feature_mask = time_features <= plot_duration
             signal_mask = time_signal <= plot_duration
-            time_features = time_features[feature_mask]
-            time_signal = time_signal[signal_mask]
-            filtered_signal_plot = self.filtered_signal[signal_mask, :]
+            time_features_plot = time_features[feature_mask]
+            time_signal_plot = time_signal[signal_mask]
+            filtered_signal_plot = self.filtered_signal[signal_mask, :][:, channels_all]
         else:
             feature_mask = slice(None)
-            filtered_signal_plot = self.filtered_signal
+            time_features_plot = time_features
+            time_signal_plot = time_signal
+            filtered_signal_plot = self.filtered_signal[:, channels_all]
         
         feature_names = ['RMS', 'MAV', 'ZC', 'SSC', 'WL']
         
@@ -1044,16 +1190,14 @@ class EMGFilteringPipeline:
             # Create figure for this channel (6 subplots: 1 filtered signal + 5 features)
             fig, axes = plt.subplots(2, 3, figsize=(18, 10))
             axes = axes.flatten()
-            
             # Plot 1: Filtered signal for this channel
-            axes[0].plot(time_signal, filtered_signal_plot[:, ch], 
+            axes[0].plot(time_signal_plot, filtered_signal_plot[:, ch_idx], 
                         color='black', linewidth=0.8, alpha=0.7)
-            axes[0].set_title(f'Filtered EMG Signal - Channel {ch+1}', 
+            axes[0].set_title(f'Filtered EMG Signal - Channel {ch}', 
                              fontsize=12, fontweight='bold')
             axes[0].set_xlabel('Time (seconds)')
             axes[0].set_ylabel('Amplitude')
             axes[0].grid(True, alpha=0.3)
-            
             # Add filter history as text
             if self.filter_history:
                 filter_text = ' → '.join(self.filter_history)
@@ -1061,34 +1205,28 @@ class EMGFilteringPipeline:
                             transform=axes[0].transAxes, fontsize=8,
                             verticalalignment='top', bbox=dict(boxstyle='round', 
                             facecolor='wheat', alpha=0.8))
-            
             # Plot 2-6: Features for this channel
             colors = ['red', 'green', 'orange', 'purple', 'brown']
-            
             for i, feature_name in enumerate(feature_names):
                 ax = axes[i+1]
-                
-                if self.extracted_features[feature_name].shape[1] > ch:
-                    feature_data = self.extracted_features[feature_name][feature_mask, ch]
-                    ax.plot(time_features, feature_data, 
+                if self.extracted_features[feature_name].shape[1] > ch_idx:
+                    feature_data = self.extracted_features[feature_name][feature_mask, ch_idx]
+                    ax.plot(time_features_plot, feature_data, 
                            color=colors[i], linewidth=2, marker='o', markersize=3)
-                    ax.fill_between(time_features, feature_data, alpha=0.3, color=colors[i])
-                
-                ax.set_title(f'{feature_name} - Channel {ch+1}', fontsize=12, fontweight='bold')
+                    ax.fill_between(time_features_plot, feature_data, alpha=0.3, color=colors[i])
+                ax.set_title(f'{feature_name} - Channel {ch}', fontsize=12, fontweight='bold')
                 ax.set_xlabel('Time (seconds)')
                 ax.set_ylabel(f'{feature_name} Value')
                 ax.grid(True, alpha=0.3)
-                
                 # Add statistics as text
-                if self.extracted_features[feature_name].shape[1] > ch:
-                    values = self.extracted_features[feature_name][:, ch]
+                if self.extracted_features[feature_name].shape[1] > ch_idx:
+                    values = self.extracted_features[feature_name][:, ch_idx]
                     stats_text = f'Mean: {np.mean(values):.3f}\nStd: {np.std(values):.3f}'
                     ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, 
                            fontsize=8, verticalalignment='top',
                            bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
-            
             plt.tight_layout()
-            plt.suptitle(f'EMG Analysis - Channel {ch+1}\n'
+            plt.suptitle(f'EMG Analysis - Channel {ch}\n'
                         f'Window: {self.window_size/self.fs:.3f}s, Overlap: {self.overlap*100:.0f}%', 
                         fontsize=14, fontweight='bold', y=0.98)
             plt.show()
@@ -1098,11 +1236,11 @@ class EMGFilteringPipeline:
         print(f"FEATURE SUMMARY FOR PLOTTED CHANNELS")
         print(f"{'='*60}")
         
-        for ch in channels_to_plot:
-            print(f"\nChannel {ch+1}:")
+        for ch_idx, ch in enumerate(channels_to_plot):
+            print(f"\nChannel {ch}:")
             for feature_name in feature_names:
-                if self.extracted_features[feature_name].shape[1] > ch:
-                    values = self.extracted_features[feature_name][:, ch]
+                if self.extracted_features[feature_name].shape[1] > ch_idx:
+                    values = self.extracted_features[feature_name][:, ch_idx]
                     print(f"  {feature_name}: Mean={np.mean(values):.4f}, "
                           f"Range=[{np.min(values):.4f}, {np.max(values):.4f}]")
     
@@ -1128,40 +1266,33 @@ class EMGFilteringPipeline:
             plot_mask = slice(None)
         
         # Determine number of channels to plot (max 4)
-        channels_to_plot = min(4, self.num_channels)
+        channels_all = self.selected_channels if self.selected_channels is not None else list(range(self.num_channels))
+        channels_to_plot = min(4, len(channels_all))
         colors = ['blue', 'red', 'green', 'orange']
-        
         # Create subplot for each feature
         fig, axes = plt.subplots(2, 3, figsize=(18, 12))
         axes = axes.flatten()
-        
         feature_names = ['RMS', 'MAV', 'ZC', 'SSC', 'WL']
-        
         for i, feature_name in enumerate(feature_names):
             ax = axes[i]
-            
             # Plot each channel
-            for ch in range(channels_to_plot):
-                if self.extracted_features[feature_name].shape[1] > ch:
-                    feature_data = self.extracted_features[feature_name][plot_mask, ch]
+            for ch_idx in range(channels_to_plot):
+                if self.extracted_features[feature_name].shape[1] > ch_idx:
+                    feature_data = self.extracted_features[feature_name][plot_mask, ch_idx]
                     ax.plot(time_features, feature_data, 
-                           color=colors[ch % len(colors)], 
-                           label=f'Ch {ch+1}', linewidth=1.5, marker='o', markersize=2)
-            
+                           color=colors[ch_idx % len(colors)], 
+                           label=f'Ch {channels_all[ch_idx]}', linewidth=1.5, marker='o', markersize=2)
             ax.set_title(f'{feature_name} Feature - All Channels', fontsize=12, fontweight='bold')
             ax.set_xlabel('Time (seconds)')
             ax.set_ylabel(f'{feature_name} Value')
             ax.grid(True, alpha=0.3)
             if channels_to_plot <= 4:
                 ax.legend(fontsize=8)
-        
         # Remove the empty subplot
         fig.delaxes(axes[5])
-        
         plt.tight_layout()
         plt.suptitle('EMG Features Overview - All Channels', fontsize=16, fontweight='bold', y=0.98)
         plt.show()
-        
         # Print feature statistics
         self.print_feature_statistics()
     
@@ -1223,18 +1354,25 @@ class EMGFilteringPipeline:
             for window_idx in range(len(self.window_centers)):
                 row = {'Window': window_idx + 1, 
                        'Time_s': self.window_centers[window_idx] / self.fs}
-                
                 for feature_name in feature_names:
-                    for ch in range(self.num_channels):
+                    for ch in range(self.extracted_features[feature_name].shape[1]):
                         col_name = f'{feature_name}_Ch{ch+1}'
                         row[col_name] = self.extracted_features[feature_name][window_idx, ch]
-                
+                # Add exercise label (same for all rows in this file)
+                if self.exercise is not None:
+                    row['Exercise'] = int(np.squeeze(self.exercise))
+                    row['Exercise_Label'] = self.get_exercise_name()
+                else:
+                    row['Exercise'] = ''
+                    row['Exercise_Label'] = ''
                 data.append(row)
             
             df = pd.DataFrame(data)
+            import os
             df.to_csv(filename, index=False)
-            
+            abs_path = os.path.abspath(filename)
             print(f"\n✓ Features saved to {filename}")
+            print(f"  Absolute path: {abs_path}")
             print(f"  Shape: {df.shape}")
             print(f"  Columns: {list(df.columns)}")
             
@@ -1282,30 +1420,28 @@ class EMGFilteringPipeline:
         time_vector = np.arange(plot_samples) / self.fs
         
         # Determine number of channels to plot (max 4 for readability)
-        channels_to_plot = min(4, self.num_channels)
-        
+        channels_all = self.selected_channels if self.selected_channels is not None else list(range(self.num_channels))
+        channels_to_plot = min(4, len(channels_all))
         fig, axes = plt.subplots(channels_to_plot, 2, figsize=(15, 3*channels_to_plot))
         if channels_to_plot == 1:
             axes = axes.reshape(1, -1)
-        
         colors = ['blue', 'red', 'green', 'orange']
-        
-        for ch in range(channels_to_plot):
+        for ch_idx in range(channels_to_plot):
+            ch = channels_all[ch_idx]
             # Original signal
-            axes[ch, 0].plot(time_vector, self.original_signal[:plot_samples, ch], 
-                           color=colors[ch], alpha=0.8, linewidth=0.8)
-            axes[ch, 0].set_title(f'Original EMG - Channel {ch+1}')
-            axes[ch, 0].set_xlabel('Time (seconds)')
-            axes[ch, 0].set_ylabel('Amplitude')
-            axes[ch, 0].grid(True, alpha=0.3)
-            
+            axes[ch_idx, 0].plot(time_vector, self.original_signal[:plot_samples, ch], 
+                           color=colors[ch_idx % len(colors)], alpha=0.8, linewidth=0.8)
+            axes[ch_idx, 0].set_title(f'Original EMG - Channel {ch}')
+            axes[ch_idx, 0].set_xlabel('Time (seconds)')
+            axes[ch_idx, 0].set_ylabel('Amplitude')
+            axes[ch_idx, 0].grid(True, alpha=0.3)
             # Filtered signal
-            axes[ch, 1].plot(time_vector, self.filtered_signal[:plot_samples, ch], 
-                           color=colors[ch], alpha=0.8, linewidth=0.8)
-            axes[ch, 1].set_title(f'Filtered EMG - Channel {ch+1}')
-            axes[ch, 1].set_xlabel('Time (seconds)')
-            axes[ch, 1].set_ylabel('Amplitude')
-            axes[ch, 1].grid(True, alpha=0.3)
+            axes[ch_idx, 1].plot(time_vector, self.filtered_signal[:plot_samples, ch], 
+                           color=colors[ch_idx % len(colors)], alpha=0.8, linewidth=0.8)
+            axes[ch_idx, 1].set_title(f'Filtered EMG - Channel {ch}')
+            axes[ch_idx, 1].set_xlabel('Time (seconds)')
+            axes[ch_idx, 1].set_ylabel('Amplitude')
+            axes[ch_idx, 1].grid(True, alpha=0.3)
         
         filter_text = ' → '.join(self.filter_history) if self.filter_history else 'No filters applied'
         plt.suptitle(f'EMG Filtering Results\nApplied: {filter_text}', 
@@ -1362,6 +1498,7 @@ def display_menu():
     print("16. Plot filtered signal only")
     print("17. Reset signal to original")
     print("18. Load new file")
+    print("19. Batch process ZIP of MATLAB files (extract & combine features)")
     print("0. Exit")
     print(f"{'='*70}")
 
@@ -1369,11 +1506,11 @@ def get_user_choice():
     """Get user's menu choice with input validation."""
     while True:
         try:
-            choice = int(input("\nEnter your choice (0-18): "))
-            if 0 <= choice <= 18:
+            choice = int(input("\nEnter your choice (0-19): "))
+            if 0 <= choice <= 19:
                 return choice
             else:
-                print("Please enter a number between 0 and 18.")
+                print("Please enter a number between 0 and 19.")
         except ValueError:
             print("Please enter a valid number.")
 
@@ -1392,6 +1529,72 @@ def get_filter_parameters():
                 print("Please enter 1 or 2.")
         except ValueError:
             print("Please enter a valid number.")
+
+def batch_process_zip_of_mat_files(pipeline):
+    print("\nSelect a ZIP file containing MATLAB .mat files...")
+    print("Please enter the full path to your ZIP file (or leave blank to cancel): ")
+    zip_path = input().strip()
+    if not zip_path:
+        print("No ZIP file provided. Cancelling batch process.")
+        return
+    extract_dir = "unzipped_matlab_files"
+    if os.path.exists(extract_dir):
+        shutil.rmtree(extract_dir)
+    os.makedirs(extract_dir, exist_ok=True)
+    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+        zip_ref.extractall(extract_dir)
+    print(f"Extracted all files to: {os.path.abspath(extract_dir)}")
+    mat_files = glob.glob(os.path.join(extract_dir, '*.mat'))
+    if not mat_files:
+        print('No .mat files found in extracted directory.')
+        return
+    all_feature_dfs = []
+    for mat_path in mat_files:
+        print(f"Processing: {mat_path}")
+        try:
+            # Load .mat file into pipeline
+            mat = scipy.io.loadmat(mat_path)
+            emg = np.squeeze(mat['emg'])
+            pipeline.original_signal = emg if emg.ndim > 1 else emg[:, np.newaxis]
+            pipeline.num_channels = pipeline.original_signal.shape[1]
+            pipeline.filtered_signal = pipeline.original_signal.copy()
+            pipeline.selected_channels = list(range(pipeline.num_channels))
+            pipeline.exercise = np.squeeze(mat['exercise']) if 'exercise' in mat else None
+            # Apply complete pipeline and extract features
+            pipeline.reset_signal()
+            pipeline.apply_complete_pipeline()
+            pipeline.extract_windowed_features_optimal()
+            # Save features to a temporary DataFrame
+            df = pipeline.feature_matrix
+            if not isinstance(df, pd.DataFrame):
+                # Convert numpy array to DataFrame with generic column names
+                if isinstance(df, np.ndarray):
+                    n_cols = df.shape[1] if df.ndim == 2 else 1
+                    col_names = [f'feat_{i+1}' for i in range(n_cols)]
+                    df = pd.DataFrame(df, columns=col_names)
+                    print(f"  Converted feature_matrix to DataFrame with columns: {df.columns.tolist()}")
+                else:
+                    print(f"  Skipping: feature_matrix is not a DataFrame or ndarray (type: {type(df)})")
+                    continue
+            else:
+                df = df.copy()
+            if pipeline.exercise is not None:
+                df['Exercise'] = int(np.squeeze(pipeline.exercise))
+            all_feature_dfs.append(df)
+        except Exception as e:
+            print(f"  Error processing {mat_path}: {e}")
+    if all_feature_dfs:
+        combined_df = pd.concat(all_feature_dfs, ignore_index=True)
+        default_name = "combined_emg_features.csv"
+        out_csv = input(f"Enter output CSV filename (default: {default_name}): ").strip()
+        if not out_csv:
+            out_csv = default_name
+        if not out_csv.lower().endswith('.csv'):
+            out_csv += '.csv'
+        combined_df.to_csv(out_csv, index=False)
+        print(f"Combined features saved to: {os.path.abspath(out_csv)}")
+    else:
+        print("No features extracted from any files.")
 
 def main():
     """Main function to run the EMG filtering pipeline."""
@@ -1573,5 +1776,12 @@ def main():
             except Exception as e:
                 print(f"Error loading new file: {e}")
 
+        elif choice == 19:  # Batch process ZIP of MATLAB files
+            try:
+                batch_process_zip_of_mat_files(pipeline)
+            except Exception as e:
+                print(f"Error in batch ZIP processing: {e}")
+
 if __name__ == "__main__":
     main()
+
