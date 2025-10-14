@@ -1,0 +1,31 @@
+#include <Servo.h>
+
+Servo myServo;
+int analogPin = A0;       // Analog input pin
+int servoPin = 9;         // Servo control pin
+int sensorValue = 0;
+int processedValue = 0;
+
+void setup() {
+  Serial.begin(9600);
+  myServo.attach(servoPin);
+}
+
+void loop() {
+  // 1. Read analog input
+  sensorValue = analogRead(analogPin);
+
+  // 2. Send sensor value to Python
+  Serial.println(sensorValue);
+
+  // 3. Wait for processed value from Python
+  if (Serial.available() > 0) {
+    processedValue = Serial.parseInt(); // read integer sent by Python
+    processedValue = constrain(processedValue, 0, 180); // ensure valid servo angle
+
+    // 4. Move servo
+    myServo.write(processedValue);
+  }
+
+  delay(50); // small delay for stability
+}
