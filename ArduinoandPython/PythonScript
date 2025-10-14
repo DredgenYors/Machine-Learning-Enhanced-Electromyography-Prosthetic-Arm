@@ -1,0 +1,30 @@
+import serial
+import time
+
+# Set your Arduino COM port
+arduino = serial.Serial('COM3', 9600, timeout=1)
+time.sleep(2)  # Wait for Arduino to reset
+
+def process_signal(value):
+    # Example processing: map 0-1023 -> 0-180 for servo
+    return int((value / 1023) * 180)
+
+while True:
+    try:
+        line = arduino.readline().decode('utf-8').strip()
+        if line:
+            analog_value = int(line)
+            print(f"Received: {analog_value}")
+
+            # Process analog value
+            servo_value = process_signal(analog_value)
+            print(f"Sending to Arduino: {servo_value}")
+
+            # Send processed value back to Arduino
+            arduino.write(f"{servo_value}\n".encode())
+
+    except KeyboardInterrupt:
+        print("Exiting...")
+        break
+    except Exception as e:
+        print(e)
