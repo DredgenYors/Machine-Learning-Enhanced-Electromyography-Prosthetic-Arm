@@ -12,7 +12,7 @@ Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver();
 #define THRESH_VALUE 250 // EMG threshold
 
 // EMG input pin
-const int EMG_PIN = A3;
+const int EMG_PIN = A0;
 
 // Define which PCA9685 channels the servos use
 int servoPins[NUM_SERVOS] = {0, 1, 2, 3, 4};  // Channels 0–4
