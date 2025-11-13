@@ -1,0 +1,22 @@
+{
+  "run_id": "20251112_184911",
+  "fs": 1000,
+  "win_ms": 200,
+  "step_ms": 50,
+  "smooth": "rms",
+  "rms_ms": 200,
+  "lpf": 5.0,
+  "band_low": 20.0,
+  "band_high": 450.0,
+  "notch_base": 60.0,
+  "notch_q": 30.0,
+  "notch_harmonics": 1,
+  "epochs": 40,
+  "batch": 64,
+  "test_split": 0.2,
+  "val_split": 0.2,
+  "classes": [
+    0,
+    1
+  ]
+}

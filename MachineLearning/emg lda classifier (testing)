@@ -6,7 +6,7 @@ from sklearn.metrics import accuracy_score, classification_report
 from sklearn.preprocessing import StandardScaler
 
 # Load features CSV (update filename as needed)
-df = pd.read_csv('emg_features_db123.csv')
+df = pd.read_csv("testingcsvdata1.csv")
 
 # Use all numeric feature columns except 'Exercise'
 feature_cols = [col for col in df.columns if col != 'Exercise' and np.issubdtype(df[col].dtype, np.number)]

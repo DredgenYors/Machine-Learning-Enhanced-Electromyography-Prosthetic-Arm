@@ -1,0 +1,158 @@
+# ---- Imports (deduped) ----
+import os, sys
+import scipy.io
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.signal import butter, filtfilt
+from tkinter import Tk
+from tkinter.filedialog import askopenfilename
+from scipy.stats import mode
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+
+# Make sure we can import from local 'scripts' folder
+sys.path.append(os.getcwd())
+from scripts.preprocessing import apply_filters  # <-- reusable bandpass + notch
+
+# -------------------------------
+# 1) Pick a .mat file
+# -------------------------------
+Tk().withdraw()  # hide the root Tk window
+mat_file = askopenfilename(title="Select a MATLAB .mat file",
+                           filetypes=[("MAT files", "*.mat")])
+
+if not mat_file:
+    raise ValueError("No file selected. Exiting.")
+
+print(f"Selected file: {mat_file}")
+
+# -------------------------------
+# 2) Load MATLAB file
+# -------------------------------
+mat = scipy.io.loadmat(mat_file)
+
+if 'emg' not in mat:
+    raise ValueError("No 'emg' variable in .mat file.")
+emg = np.squeeze(mat['emg'])  # shape: (samples, channels)
+
+# Labels (optional)
+if 'stimulus' in mat:
+    stimulus = mat['stimulus']
+    print("Using 'stimulus' as labels.")
+else:
+    stimulus = None
+    print("No per-sample labels found; continuing without labels.")
+
+# -------------------------------
+# 3) Normalize EMG shape info
+# -------------------------------
+print("EMG shape:", emg.shape)
+if emg.ndim == 1:
+    num_channels = 1
+    emg = emg[:, np.newaxis]
+    print("Single-channel EMG")
+else:
+    num_channels = emg.shape[1]
+    print(f"Multi-channel EMG with {num_channels} channels")
+
+# -------------------------------
+# 4) Plot raw EMG
+# -------------------------------
+plt.figure(figsize=(12, 6))
+for ch in range(num_channels):
+    plt.plot(emg[:, ch] + ch*0.5, label=f'Ch {ch}')
+plt.title("Raw EMG")
+plt.xlabel("Time (samples)")
+plt.ylabel("Amplitude (offset)")
+plt.legend()
+plt.show()
+
+# -------------------------------
+# 5) Mean removal + rectification (envelope prep)
+# -------------------------------
+emg_mean_removed = emg - np.mean(emg, axis=0)
+emg_rectified = np.abs(emg_mean_removed)
+
+# -------------------------------
+# 6) Apply reusable bandpass + notch filters
+#    (this is the shared logic from scripts/preprocessing.py)
+# -------------------------------
+FS = 1000  # adjust to your real sampling rate if different
+emg_filtered = apply_filters(emg, FS)  # bandpass(20-450) + 60Hz notch
+
+# Quick look at filtered vs raw
+plot_len = min(2000, emg.shape[0])
+t = np.arange(plot_len) / FS
+
+plt.figure(figsize=(12, 6))
+plt.plot(t, emg[:plot_len, 0], label="Raw ch1")
+plt.plot(t, emg_filtered[:plot_len, 0], label="Filtered ch1")
+plt.title("Raw vs Filtered (Channel 1, first 2s)")
+plt.xlabel("Time (s)")
+plt.ylabel("Amplitude")
+plt.legend()
+plt.show()
+
+# -------------------------------
+# 7) Low-pass the rectified signal to compare envelopes
+# -------------------------------
+def lowpass_filter(signal, fs, cutoff, order=4):
+    nyq = 0.5 * fs
+    normal_cutoff = cutoff / nyq
+    b, a = butter(order, normal_cutoff, btype='low')
+    return filtfilt(b, a, signal, axis=0)
+
+emg_lp_2hz  = lowpass_filter(emg_rectified, FS, 2)
+emg_lp_5hz  = lowpass_filter(emg_rectified, FS, 5)
+emg_lp_10hz = lowpass_filter(emg_rectified, FS, 10)
+emg_lp_20hz = lowpass_filter(emg_rectified, FS, 20)
+
+# Plot rectified + LPF envelopes
+plot_len = min(2000, emg.shape[0])
+fig, axes = plt.subplots(nrows=1, ncols=5, figsize=(22, 10), sharey=True)
+
+# Raw rectified
+for ch in range(num_channels):
+    axes[0].plot(emg_rectified[:plot_len, ch] + ch*0.5, label=f'Ch {ch}')
+axes[0].set_title('Raw Rectified')
+axes[0].set_xlabel('Time (samples)')
+axes[0].set_ylabel('Amplitude (offset)')
+axes[0].legend()
+
+# 2 Hz
+for ch in range(num_channels):
+    axes[1].plot(emg_lp_2hz[:plot_len, ch] + ch*0.5, label=f'Ch {ch}')
+axes[1].set_title('2 Hz LPF')
+axes[1].set_xlabel('Time (samples)')
+axes[1].legend()
+
+# 5 Hz
+for ch in range(num_channels):
+    axes[2].plot(emg_lp_5hz[:plot_len, ch] + ch*0.5, label=f'Ch {ch}')
+axes[2].set_title('5 Hz LPF')
+axes[2].set_xlabel('Time (samples)')
+axes[2].legend()
+
+# 10 Hz
+for ch in range(num_channels):
+    axes[3].plot(emg_lp_10hz[:plot_len, ch] + ch*0.5, label=f'Ch {ch}')
+axes[3].set_title('10 Hz LPF')
+axes[3].set_xlabel('Time (samples)')
+axes[3].legend()
+
+# 20 Hz
+for ch in range(num_channels):
+    axes[4].plot(emg_lp_20hz[:plot_len, ch] + ch*0.5, label=f'Ch {ch}')
+axes[4].set_title('20 Hz LPF')
+axes[4].set_xlabel('Time (samples)')
+axes[4].legend()
+
+plt.tight_layout()
+plt.show()
+
+print("Mean of each channel:", np.mean(emg, axis=0))
+print("Min of each channel:", np.min(emg, axis=0))
+
+# (Your ML training code can plug in below once features are ready)
+# ...
