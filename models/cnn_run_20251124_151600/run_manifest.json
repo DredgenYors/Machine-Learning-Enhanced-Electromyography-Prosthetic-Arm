@@ -1,0 +1,21 @@
+{
+  "run_id": "20251124_151600",
+  "data_dir": "C:\\Users\\miyah\\OneDrive\\Desktop\\Machine-Learning-Enhanced-Electromyography-Prosthetic-Arm-1\\emg_datasets",
+  "outdir": "models\\cnn_run_20251124_151600",
+  "fs": 1000,
+  "win_ms": 50,
+  "step_ms": 25,
+  "epochs": 40,
+  "batch": 64,
+  "test_split": 0.2,
+  "val_split": 0.2,
+  "num_classes": 3,
+  "classes": [
+    0,
+    1,
+    2
+  ],
+  "scaler_file": "scaler_mu_sd.npz",
+  "best_checkpoint": "checkpoints/best.keras",
+  "final_model": "cnn_final.keras"
+}
