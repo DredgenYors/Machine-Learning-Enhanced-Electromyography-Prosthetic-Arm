@@ -26,17 +26,25 @@ Part 1: (1st of October)
    - Implement a small Python program to simulate reading inputs and mapping them
    - Send Python commands to Arduino over serial
 
-10/9/20205
+10/9/2025
 
 1. Modify the current code to be separated into files
 2. Build the ML file based on the current state
 3. Build a file to save the data and then train the ML
 
 Part 2: Hardware & Integration (October 15th-22nd)
+
 1. Acquire EMG hardware
    - Servos, battery pack, mounting equipment, wires
 2. 
 Part 3: Testing, validation, & deployment (Nov 27th)
+
+To run the live demo script: 
+python scripts/demo_realtime.py --run_dir "C:\Users\miyah\OneDrive\Desktop\Machine-Learning-Enhanced-Electromyography-Prosthetic-Arm-1\models\cnn_run_20251124_151600" --port COM3 <-- Example
+
+To run training script: 
+python scripts/train_cnn.py   --data_dir "C:\Users\miyah\OneDrive\Desktop\Machine-Learning-Enhanced-Electromyography-Prosthetic-Arm-1\emg_datasets" <-- Example
+
 
 
 
