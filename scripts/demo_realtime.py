@@ -26,8 +26,6 @@ def get_args():
 def parse_emg_line(line: str) -> float:
     """
     Extract numeric EMG value from a line.
-
-    Prefer the LAST comma-separated field (e.g. 'DATA,24,0.117' -> 0.117).
     Falls back to first numeric token if that fails.
     """
     # Try CSV-style last field first
@@ -130,7 +128,7 @@ def main():
 
             samples_since_pred += 1
 
-            # Debug: show buffer length occasionally
+            # Debugging
             if len(buffer) % 50 == 0:
                 print(f"[BUF] len={len(buffer)} / {win_len}")
 
@@ -148,9 +146,9 @@ def main():
                 continue
             samples_since_pred = 0
 
-            # Prepare input: (1, T, C=1)
+            # Prepare input
             x = np.array(buffer, dtype=np.float32)[:, None]
-            x = x[None, :, :]  # shape (1, win_len, 1)
+            x = x[None, :, :]  
 
             # Standardize using training stats
             x = (x - mu) / sd
@@ -168,11 +166,11 @@ def main():
 
             print(f"[MODEL] pred_idx={pred_idx}, gesture_id={gesture_id}, conf={conf:.2f}")
 
-            # Simple cooldown: send every cooldown seconds, even if gesture is same
+            # Cooldown
             now = time.time()
             if now - last_send_time > args.cooldown:
-                if gesture_id in (0, 1, 2):   # adjust range if you have more gestures
-                    msg = f"{gesture_id}\n"   # include newline
+                if gesture_id in (0, 1, 2):   
+                    msg = f"{gesture_id}\n"   
                     ser.write(msg.encode("ascii"))
                     last_sent = gesture_id
                     last_send_time = now
@@ -192,3 +190,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
