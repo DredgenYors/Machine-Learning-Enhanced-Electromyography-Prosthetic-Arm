@@ -35,7 +35,7 @@ def get_args():
     return p.parse_args()
 
 
-# Load your CSV files
+# Load CSV files
 
 def load_all_csv(data_dir):
     data_dir = Path(data_dir)
@@ -53,7 +53,7 @@ def load_all_csv(data_dir):
             print(f"[WARN] Skipping {csv_file}: no 'gesture' column")
             continue
 
-        emg = df["voltage"].to_numpy(dtype=float)[:, None]  # shape (N,1)
+        emg = df["voltage"].to_numpy(dtype=float)[:, None]  
         labels = df["gesture"].to_numpy(dtype=int)
 
         if len(emg) != len(labels):
@@ -96,7 +96,7 @@ def make_windows(X, y, fs, win_ms, step_ms):
     return Xw.astype(np.float32), np.array(yw)
 
 
-# Build CNN
+# CNN
 def build_cnn(input_shape, num_classes):
     """
     Smaller 1D CNN to reduce overfitting and force the model
@@ -115,7 +115,7 @@ def build_cnn(input_shape, num_classes):
         layers.MaxPooling1D(2),
         layers.Dropout(0.3),
 
-        # Global pooling instead of big dense layers
+        # Global pooling instead of big layers
         layers.GlobalAveragePooling1D(),
 
         # Small dense head
@@ -230,13 +230,13 @@ def main():
         acc = (y_pred == y_test).mean()
         print("Test accuracy:", round(float(acc), 4))
 
-        # Classification report (print + save)
+        # Classification report 
         rep = classification_report(y_test, y_pred, digits=4)
         print(rep)
         with open(out_root / "reports" / "classification_report.txt", "w") as f:
             f.write(rep)
 
-        # Confusion matrix (with labels/annotations)
+        # Confusion matrix 
         cm = confusion_matrix(y_test, y_pred)
         plt.figure(figsize=(6, 5))
         plt.imshow(cm, cmap="Blues", interpolation="nearest")
@@ -300,3 +300,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
