@@ -102,9 +102,10 @@ python scripts/train_cnn.py --data_dir "path/to/mat/files" --epochs 40 --batch 6
 
 **LDA Classifier:**
 ```bash
+# Note: The file is named without a .py extension
 python MachineLearning/"emg lda classifier (testing)"
 ```
-Note: Ensure you have a features CSV file (e.g., `emg_features_db123.csv`) generated from the filtering pipeline in your working directory.
+Ensure you have a features CSV file (e.g., `emg_features_db123.csv`) generated from the filtering pipeline in your working directory.
 
 ### Arduino Integration
 
